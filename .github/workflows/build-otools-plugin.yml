@@ -4,37 +4,63 @@ on:
   workflow_dispatch:
     inputs:
       otools_ref:
-        description: 'OTools branch/tag/SHA'
+        description: "OTools branch/tag/SHA"
         required: false
-        default: 'dev'
+        default: "dev"
       plugin_dir:
-        description: 'Plugin dir under plugins/, e.g. otools-download'
+        description: "选择要打包的插件目录"
         required: true
-        default: 'otools-download'
-      build_script:
-        description: 'pnpm script in plugin'
-        required: false
-        default: 'build'
+        type: choice
+        options:
+          - facepack
+          - gif
+          - gongde-plus
+          - mind-map
+          - otools-aimp
+          - otools-audio
+          - otools-cad-viewer
+          - otools-cftunnel
+          - otools-container
+          - otools-crop
+          - otools-cutout
+          - otools-disk
+          - otools-download
+          - otools-easywsl
+          - otools-excalidraw
+          - otools-ftp
+          - otools-http
+          - otools-idphoto
+          - otools-imgup
+          - otools-mac-helper
+          - otools-markdown
+          - otools-mqtt
+          - otools-nav
+          - otools-ngork
+          - otools-ollama
+          - otools-os-helper
+          - otools-pakcap
+          - otools-pic-collage
+          - otools-portkill
+          - otools-reqwall
+          - otools-resume-helper
+          - otools-seal-play
+          - otools-sslgo
+          - otools-starfish
+          - otools-tts
+          - otools-vm
+          - remotecrl
 
 jobs:
-  build-otools-plugin:
+  discover:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    outputs:
+      adapter_root: ${{ steps.meta.outputs.adapter_root }}
+      packid: ${{ steps.meta.outputs.packid }}
+      uuid: ${{ steps.meta.outputs.uuid }}
+      version: ${{ steps.meta.outputs.version }}
+      has_web: ${{ steps.meta.outputs.has_web }}
+      has_native: ${{ steps.meta.outputs.has_native }}
     steps:
-      - name: Checkout publish repo
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
       - name: Clone OTools
         env:
           OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
@@ -51,36 +77,215 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - id: meta
+        shell: bash
+        working-directory: OTools
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          plugin_dir = os.path.join("plugins", "${{ inputs.plugin_dir }}")
+          raw = subprocess.check_output(
+              ["python", "scripts/plugin_pack.py", "meta", plugin_dir],
+              text=True,
+          )
+          meta = json.loads(raw)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              for key in ("adapter_root", "packid", "uuid", "version", "has_web", "has_native"):
+                  fh.write(f"{key}={meta.get(key, '')}\n")
+          PY
+
+  build-web:
+    needs: discover
+    if: needs.discover.outputs.has_web == 'True' || needs.discover.outputs.has_web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone OTools
+        env:
+          OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
+          OTOOLS_REF: ${{ github.event.inputs.otools_ref }}
+        run: |
+          if [ -z "$OTOOLS_TOKEN" ]; then
+            echo "Missing secret OTOOLS_REPO_TOKEN"
+            exit 1
+          fi
+          git clone --depth 1 --branch "$OTOOLS_REF" "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/OTools.git" OTools
+          cd OTools
+          git submodule set-url vendor/otools-plugin-sdk "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/otools-plugin-sdk.git"
+          git submodule set-url vendor/tauri-remote-service "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/tauri-remote-service.git"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "lts/*"
+
       - name: Build otools-plugin-sdk
         working-directory: OTools
         run: |
           pnpm install --dir vendor/otools-plugin-sdk --no-frozen-lockfile
           pnpm --dir vendor/otools-plugin-sdk build
 
-      - name: Validate plugin directory
+      - name: Install plugin dependencies
+        working-directory: OTools
+        run: pnpm install --dir "${{ needs.discover.outputs.adapter_root }}" --no-frozen-lockfile
+
+      - name: Build plugin web assets
+        working-directory: OTools
+        run: pnpm --dir "${{ needs.discover.outputs.adapter_root }}" build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-web-${{ inputs.plugin_dir }}
+          path: OTools/${{ needs.discover.outputs.adapter_root }}/dist
+          if-no-files-found: error
+
+  build-native:
+    needs: discover
+    if: needs.discover.outputs.has_native == 'True' || needs.discover.outputs.has_native == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Clone OTools
+        shell: bash
         env:
-          PLUGIN_DIR: ${{ github.event.inputs.plugin_dir }}
+          OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
+          OTOOLS_REF: ${{ github.event.inputs.otools_ref }}
         run: |
-          if [ ! -d "OTools/plugins/$PLUGIN_DIR" ]; then
-            echo "Plugin directory not found: OTools/plugins/$PLUGIN_DIR"
+          if [ -z "$OTOOLS_TOKEN" ]; then
+            echo "Missing secret OTOOLS_REPO_TOKEN"
             exit 1
           fi
+          git clone --depth 1 --branch "$OTOOLS_REF" "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/OTools.git" OTools
+          cd OTools
+          git submodule set-url vendor/otools-plugin-sdk "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/otools-plugin-sdk.git"
+          git submodule set-url vendor/tauri-remote-service "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/tauri-remote-service.git"
+          git submodule sync --recursive
+          git submodule update --init --recursive
 
-      - name: Install plugin dependencies
-        working-directory: OTools/plugins/${{ github.event.inputs.plugin_dir }}
-        run: pnpm install --no-frozen-lockfile
-
-      - name: Build plugin
-        working-directory: OTools/plugins/${{ github.event.inputs.plugin_dir }}
-        env:
-          BUILD_SCRIPT: ${{ github.event.inputs.build_script }}
-        run: pnpm run "$BUILD_SCRIPT"
-
-      - name: Upload plugin dist artifact
-        if: always()
-        uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v5
         with:
-          name: otools-plugin-dist-${{ github.event.inputs.plugin_dir }}
-          path: |
-            OTools/plugins/${{ github.event.inputs.plugin_dir }}/dist
-          if-no-files-found: warn
+          python-version: "3.x"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            OTools/${{ needs.discover.outputs.adapter_root }}/native -> OTools/${{ needs.discover.outputs.adapter_root }}/native/target
+          key: plugin-${{ inputs.plugin_dir }}-${{ matrix.platform }}
+
+      - name: Install dependencies (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unixodbc unixodbc-dev
+
+      - name: Install dependencies (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          brew update
+          brew install unixodbc
+
+      - name: Install dependencies (Windows)
+        if: matrix.platform == 'windows'
+        run: choco install sqlserver-odbcdriver -y --no-progress
+
+      - name: Build native library
+        shell: bash
+        run: cargo build --manifest-path "OTools/${{ needs.discover.outputs.adapter_root }}/native/Cargo.toml" --release --target-dir "OTools/${{ needs.discover.outputs.adapter_root }}/native/target"
+
+      - name: Stage native library
+        shell: bash
+        run: |
+          mkdir -p artifacts/lib
+          native_path="$(python OTools/scripts/plugin_pack.py locate-native-lib "OTools/plugins/${{ inputs.plugin_dir }}" "${{ matrix.platform }}" "OTools/${{ needs.discover.outputs.adapter_root }}/native/target/release")"
+          python OTools/scripts/plugin_pack.py stage-native "OTools/plugins/${{ inputs.plugin_dir }}" "${{ matrix.platform }}" "$native_path" artifacts/lib
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-native-${{ matrix.platform }}
+          path: artifacts/lib/*
+          if-no-files-found: error
+
+  package:
+    needs:
+      - discover
+      - build-web
+      - build-native
+    if: |
+      always() &&
+      needs.discover.result == 'success' &&
+      (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
+      (needs.build-native.result == 'success' || needs.build-native.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clone OTools
+        env:
+          OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
+          OTOOLS_REF: ${{ github.event.inputs.otools_ref }}
+        run: |
+          if [ -z "$OTOOLS_TOKEN" ]; then
+            echo "Missing secret OTOOLS_REPO_TOKEN"
+            exit 1
+          fi
+          git clone --depth 1 --branch "$OTOOLS_REF" "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/OTools.git" OTools
+          cd OTools
+          git submodule set-url vendor/otools-plugin-sdk "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/otools-plugin-sdk.git"
+          git submodule set-url vendor/tauri-remote-service "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/tauri-remote-service.git"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Download web artifact
+        if: needs.discover.outputs.has_web == 'True' || needs.discover.outputs.has_web == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: plugin-web-${{ inputs.plugin_dir }}
+          path: OTools/${{ needs.discover.outputs.adapter_root }}/dist
+
+      - name: Download native artifacts
+        if: needs.discover.outputs.has_native == 'True' || needs.discover.outputs.has_native == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: plugin-native-*
+          merge-multiple: true
+          path: OTools/${{ needs.discover.outputs.adapter_root }}/lib
+
+      - name: Pack plugin zip
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          zip_path="artifacts/${{ needs.discover.outputs.packid }}-${{ needs.discover.outputs.version }}.oplg"
+          python OTools/scripts/plugin_pack.py zip "OTools/plugins/${{ inputs.plugin_dir }}" "$zip_path"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-pack-${{ needs.discover.outputs.packid }}
+          path: artifacts/*.oplg
+          if-no-files-found: error
