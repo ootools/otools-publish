@@ -1,0 +1,65 @@
+name: build-otools
+
+on:
+  workflow_dispatch:
+    inputs:
+      otools_ref:
+        description: 'OTools branch/tag/SHA'
+        required: false
+        default: 'dev'
+      build_script:
+        description: 'pnpm script in OTools'
+        required: false
+        default: 'build'
+
+jobs:
+  build-otools:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout publish repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Clone OTools
+        env:
+          OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
+          OTOOLS_REF: ${{ github.event.inputs.otools_ref }}
+        run: |
+          if [ -z "$OTOOLS_TOKEN" ]; then
+            echo "Missing secret OTOOLS_REPO_TOKEN"
+            exit 1
+          fi
+          git clone --depth 1 --branch "$OTOOLS_REF" "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/OTools.git" OTools
+          cd OTools
+          git submodule update --init --recursive
+
+      - name: Install dependencies
+        working-directory: OTools
+        run: pnpm install --frozen-lockfile
+
+      - name: Build OTools
+        working-directory: OTools
+        env:
+          BUILD_SCRIPT: ${{ github.event.inputs.build_script }}
+        run: pnpm run "$BUILD_SCRIPT"
+
+      - name: Upload dist artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: otools-dist
+          path: |
+            OTools/dist
+            OTools/plugins/**/dist
+          if-no-files-found: warn
