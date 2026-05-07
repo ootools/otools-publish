@@ -51,9 +51,11 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --recursive
 
-      - name: Install root dependencies
+      - name: Build otools-plugin-sdk
         working-directory: OTools
-        run: pnpm install --frozen-lockfile
+        run: |
+          pnpm install --dir vendor/otools-plugin-sdk --no-frozen-lockfile
+          pnpm --dir vendor/otools-plugin-sdk build
 
       - name: Validate plugin directory
         env:
@@ -63,6 +65,10 @@ jobs:
             echo "Plugin directory not found: OTools/plugins/$PLUGIN_DIR"
             exit 1
           fi
+
+      - name: Install plugin dependencies
+        working-directory: OTools/plugins/${{ github.event.inputs.plugin_dir }}
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build plugin
         working-directory: OTools/plugins/${{ github.event.inputs.plugin_dir }}
