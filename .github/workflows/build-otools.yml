@@ -42,8 +42,9 @@ jobs:
           fi
           git clone --depth 1 --branch "$OTOOLS_REF" "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/OTools.git" OTools
           cd OTools
-          git config --global url."https://x-access-token:${OTOOLS_TOKEN}@github.com/".insteadOf "git@github.com:"
-          git config --global url."https://x-access-token:${OTOOLS_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          git submodule set-url vendor/otools-plugin-sdk "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/otools-plugin-sdk.git"
+          git submodule set-url vendor/tauri-remote-service "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/tauri-remote-service.git"
+          git submodule sync --recursive
           git submodule update --init --recursive
 
       - name: Install dependencies
