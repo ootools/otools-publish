@@ -102,7 +102,13 @@ jobs:
         id: release_version
         shell: bash
         working-directory: OTools
-        run: echo "version=$(node -p 'require(\"./src-tauri/tauri.conf.json\").version')" >> "$GITHUB_OUTPUT"
+        run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          if [ -z "$version" ]; then
+            echo "Failed to resolve release version from OTools/src-tauri/tauri.conf.json" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Build the App (Windows)
         if: matrix.platform == 'windows-latest'
