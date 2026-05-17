@@ -116,6 +116,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUST_BACKTRACE: full
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: OTools
           args: --bundles nsis
@@ -124,7 +126,7 @@ jobs:
           releaseBody: "See the assets to download this version and install."
           releaseDraft: true
           prerelease: false
-          uploadUpdaterJson: false
+          uploadUpdaterJson: true
 
       - name: Build the App (Linux/MacOS)
         if: matrix.platform != 'windows-latest'
@@ -132,6 +134,8 @@ jobs:
         run: pnpm tauri-build
         env:
           RUST_BACKTRACE: full
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Release Assets (Linux/MacOS)
         if: matrix.platform != 'windows-latest'
@@ -147,13 +151,13 @@ jobs:
             OTools/target/**/bundle/**/*.deb
             OTools/target/**/bundle/**/*.rpm
             OTools/target/**/bundle/**/*.dmg
-            OTools/target/**/bundle/**/*.app.tar.gz
-            OTools/target/**/bundle/**/*.tar.gz
+            OTools/target/**/bundle/**/*.sig
+            OTools/target/**/bundle/**/latest.json
             OTools/src-tauri/target/release/bundle/**/*.AppImage
             OTools/src-tauri/target/release/bundle/**/*.deb
             OTools/src-tauri/target/release/bundle/**/*.rpm
             OTools/src-tauri/target/release/bundle/**/*.dmg
-            OTools/src-tauri/target/release/bundle/**/*.app.tar.gz
-            OTools/src-tauri/target/release/bundle/**/*.tar.gz
+            OTools/src-tauri/target/release/bundle/**/*.sig
+            OTools/src-tauri/target/release/bundle/**/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
