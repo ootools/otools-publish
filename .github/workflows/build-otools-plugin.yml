@@ -1,4 +1,5 @@
 name: build-otools-plugin
+run-name: "build-otools-plugin • ${{ github.event.inputs.plugin_dir }} • ref:${{ github.event.inputs.otools_ref || 'dev' }}"
 
 on:
   workflow_dispatch:
