@@ -1,5 +1,5 @@
 name: build-otools-plugin
-run-name: "build-otools-plugin • ${{ github.event.inputs.plugin_dir }} • ref:${{ github.event.inputs.otools_ref || 'dev' }}"
+run-name: "build-otools-plugin • ${{ github.event.inputs.plugin_dir }} • v${{ github.event.inputs.display_version || 'auto' }} • ref:${{ github.event.inputs.otools_ref || 'dev' }}"
 
 on:
   workflow_dispatch:
@@ -8,6 +8,10 @@ on:
         description: "OTools branch/tag/SHA"
         required: false
         default: "dev"
+      display_version:
+        description: "显示在 Actions 列表里的版本号，例如 0.1.0"
+        required: false
+        default: "auto"
       plugin_dir:
         description: "选择要打包的插件目录"
         required: true
