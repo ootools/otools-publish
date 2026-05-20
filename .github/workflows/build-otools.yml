@@ -113,7 +113,6 @@ jobs:
             patchelf \
             libpipewire-0.3-dev \
             libspeechd-dev \
-            linux-headers-$(uname -r) \
             pkg-config \
             unixodbc \
             unixodbc-dev \
@@ -168,6 +167,7 @@ jobs:
           name: OTools-v${{ needs.resolve_version.outputs.version }}
           draft: true
           prerelease: false
+          overwrite_files: true
           fail_on_unmatched_files: false
           files: |
             OTools/target/**/bundle/**/*.AppImage
@@ -175,13 +175,11 @@ jobs:
             OTools/target/**/bundle/**/*.rpm
             OTools/target/**/bundle/**/*.dmg
             OTools/target/**/bundle/**/*.sig
-            OTools/target/**/bundle/**/latest*.json
             OTools/src-tauri/target/release/bundle/**/*.AppImage
             OTools/src-tauri/target/release/bundle/**/*.deb
             OTools/src-tauri/target/release/bundle/**/*.rpm
             OTools/src-tauri/target/release/bundle/**/*.dmg
             OTools/src-tauri/target/release/bundle/**/*.sig
-            OTools/src-tauri/target/release/bundle/**/latest*.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
