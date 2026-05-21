@@ -183,14 +183,133 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Generate platform latest.json (Linux/MacOS)
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        working-directory: OTools
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import glob
+          import json
+          import os
+          import platform
+
+          version = "${{ needs.resolve_version.outputs.version }}".lstrip("v")
+          tag = f"v{version}"
+          repo = "${{ github.repository }}"
+          matrix_platform = "${{ matrix.platform }}"
+          os_key = "darwin" if matrix_platform == "macos-latest" else "linux"
+
+          arch_map = {
+            "x86_64": "x86_64",
+            "amd64": "x86_64",
+            "aarch64": "aarch64",
+            "arm64": "aarch64",
+            "i686": "i686",
+            "i386": "i686",
+            "armv7l": "armv7",
+          }
+          machine = platform.machine().lower()
+          arch = arch_map.get(machine, machine)
+          if arch not in {"x86_64", "aarch64", "i686", "armv7"}:
+            arch = "x86_64"
+
+          def detect_bundle(path: str):
+            lower = path.lower()
+            if lower.endswith(".app.tar.gz"):
+              return "app"
+            if lower.endswith(".appimage") or lower.endswith(".appimage.tar.gz"):
+              return "appimage"
+            if lower.endswith(".deb"):
+              return "deb"
+            if lower.endswith(".rpm"):
+              return "rpm"
+            if lower.endswith(".msi"):
+              return "msi"
+            if lower.endswith(".exe"):
+              return "nsis"
+            return ""
+
+          preferred = {
+            "linux": ["appimage", "deb", "rpm", "nsis", "msi"],
+            "darwin": ["app", "dmg"],
+          }
+
+          candidates = []
+          for pattern in (
+            "target/**/bundle/**/*.sig",
+            "src-tauri/target/release/bundle/**/*.sig",
+          ):
+            for sig_path in glob.glob(pattern, recursive=True):
+              artifact_path = sig_path[:-4] if sig_path.endswith(".sig") else ""
+              if not artifact_path or not os.path.isfile(artifact_path):
+                continue
+              bundle = detect_bundle(artifact_path)
+              if not bundle:
+                continue
+              if os_key == "linux" and bundle not in {"appimage", "deb", "rpm"}:
+                continue
+              if os_key == "darwin" and bundle != "app":
+                continue
+              with open(sig_path, "r", encoding="utf-8") as f:
+                signature = f.read().strip()
+              if not signature:
+                continue
+              candidates.append(
+                {
+                  "bundle": bundle,
+                  "artifact_path": artifact_path,
+                  "signature": signature,
+                  "basename": os.path.basename(artifact_path),
+                }
+              )
+
+          if not candidates:
+            raise SystemExit(
+              f"No updater signature/artifact pair found for {matrix_platform}."
+            )
+
+          bundle_order = {name: idx for idx, name in enumerate(preferred.get(os_key, []))}
+          candidates.sort(key=lambda item: bundle_order.get(item["bundle"], 999))
+
+          platforms = {}
+          for idx, item in enumerate(candidates):
+            asset_url = f"https://github.com/{repo}/releases/download/{tag}/{item['basename']}"
+            if idx == 0:
+              platforms[f"{os_key}-{arch}"] = {
+                "signature": item["signature"],
+                "url": asset_url,
+              }
+            platforms[f"{os_key}-{arch}-{item['bundle']}"] = {
+              "signature": item["signature"],
+              "url": asset_url,
+            }
+
+          output = {
+            "version": version,
+            "notes": "See the assets to download this version and install.",
+            "platforms": platforms,
+          }
+
+          os.makedirs("updater-manifest", exist_ok=True)
+          out_path = f"updater-manifest/latest-{matrix_platform}.json"
+          with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+          print(f"Generated {out_path}")
+          PY
+
       - name: Upload platform latest.json
+        if: matrix.platform != 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: latest-json-${{ matrix.platform }}
           path: |
+            OTools/updater-manifest/latest-*.json
             OTools/target/**/bundle/**/latest*.json
             OTools/src-tauri/target/release/bundle/**/latest*.json
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   publish-updater-manifest:
     needs:
@@ -219,10 +338,11 @@ jobs:
           import json
           import os
           import urllib.request
+          import urllib.error
 
           version = "${{ needs.resolve_version.outputs.version }}"
           expected_version = version.lstrip("v")
-          github_latest_url = f"https://github.com/ootools/otools-publish/releases/download/v{version}/latest.json"
+          github_latest_url = f"https://github.com/${{ github.repository }}/releases/download/v{version}/latest.json"
 
           def load_json(path):
             with open(path, "r", encoding="utf-8") as f:
@@ -247,8 +367,19 @@ jobs:
               continue
             manifests.append(data)
 
-          if not manifests:
-            raise SystemExit("No valid updater latest.json artifacts found from platform jobs.")
+          remote_data = None
+          try:
+            with urllib.request.urlopen(github_latest_url) as response:
+              remote_data = json.loads(response.read().decode("utf-8"))
+          except urllib.error.URLError:
+            remote_data = None
+          except Exception:
+            remote_data = None
+
+          if not manifests and not isinstance(remote_data, dict):
+            raise SystemExit(
+              "No valid updater latest.json artifacts found from platform jobs, and no remote latest.json found for this tag."
+            )
 
           merged_platforms = {}
           merged_notes = None
@@ -263,8 +394,6 @@ jobs:
             if merged_pub_date is None and item.get("pub_date"):
               merged_pub_date = str(item["pub_date"])
 
-          with urllib.request.urlopen(github_latest_url) as response:
-            remote_data = json.loads(response.read().decode("utf-8"))
           if isinstance(remote_data, dict):
             remote_platforms = remote_data.get("platforms", {})
             if isinstance(remote_platforms, dict):
