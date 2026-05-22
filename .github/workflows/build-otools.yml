@@ -183,8 +183,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate platform latest.json (Linux/MacOS)
-        if: matrix.platform != 'windows-latest'
+      - name: Generate platform latest.json
         shell: bash
         working-directory: OTools
         run: |
@@ -199,7 +198,12 @@ jobs:
           tag = f"v{version}"
           repo = "${{ github.repository }}"
           matrix_platform = "${{ matrix.platform }}"
-          os_key = "darwin" if matrix_platform == "macos-latest" else "linux"
+          os_key_map = {
+            "macos-latest": "darwin",
+            "ubuntu-latest": "linux",
+            "windows-latest": "windows",
+          }
+          os_key = os_key_map.get(matrix_platform, "linux")
 
           arch_map = {
             "x86_64": "x86_64",
@@ -231,9 +235,16 @@ jobs:
               return "nsis"
             return ""
 
+          allowed_bundles = {
+            "linux": {"appimage", "deb", "rpm"},
+            "darwin": {"app"},
+            "windows": {"nsis", "msi"},
+          }
+
           preferred = {
             "linux": ["appimage", "deb", "rpm", "nsis", "msi"],
             "darwin": ["app", "dmg"],
+            "windows": ["nsis", "msi"],
           }
 
           candidates = []
@@ -248,9 +259,7 @@ jobs:
               bundle = detect_bundle(artifact_path)
               if not bundle:
                 continue
-              if os_key == "linux" and bundle not in {"appimage", "deb", "rpm"}:
-                continue
-              if os_key == "darwin" and bundle != "app":
+              if bundle not in allowed_bundles.get(os_key, set()):
                 continue
               with open(sig_path, "r", encoding="utf-8") as f:
                 signature = f.read().strip()
@@ -301,7 +310,6 @@ jobs:
           PY
 
       - name: Upload platform latest.json
-        if: matrix.platform != 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: latest-json-${{ matrix.platform }}
