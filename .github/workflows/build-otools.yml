@@ -153,7 +153,7 @@ jobs:
       - name: Build the App (Linux/MacOS)
         if: matrix.platform != 'windows-latest'
         working-directory: OTools
-        run: pnpm tauri-build
+        run: pnpm tauri:build
         env:
           RUST_BACKTRACE: full
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
