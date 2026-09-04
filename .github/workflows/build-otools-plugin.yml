@@ -28,11 +28,13 @@ on:
           - otools-container
           - otools-crop
           - otools-cutout
+          - otools-dbm
           - otools-disk
           - otools-download
           - otools-easywsl
           - otools-excalidraw
           - otools-ftp
+          - otools-git
           - otools-http
           - otools-idphoto
           - otools-imgup
@@ -49,8 +51,10 @@ on:
           - otools-reqwall
           - otools-resume-helper
           - otools-seal-play
+          - otools-servrun
           - otools-sslgo
           - otools-starfish
+          - otools-term
           - otools-tts
           - otools-vm
           - remotecrl
