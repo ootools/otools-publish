@@ -1,5 +1,5 @@
 name: build-otools
-run-name: "build-otools • v${{ github.event.inputs.display_version || 'auto' }} • ref:${{ github.event.inputs.otools_ref || 'dev' }}"
+run-name: "build-otools • v${{ github.event.inputs.display_version || 'auto' }} • ref:${{ github.event.inputs.otools_ref || 'main' }}"
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
       otools_ref:
         description: "OTools branch/tag/SHA"
         required: false
-        default: "dev"
+        default: "main"
       display_version:
         description: "显示在 Actions 列表里的版本号，例如 0.6.2"
         required: false
