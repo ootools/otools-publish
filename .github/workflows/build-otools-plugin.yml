@@ -140,19 +140,17 @@ jobs:
         with:
           node-version: "lts/*"
 
+      - name: Install shared frontend dependencies
+        working-directory: OTools
+        run: pnpm install --frozen-lockfile
+
       - name: Build otools-plugin-sdk
         working-directory: OTools
-        run: |
-          pnpm install --dir vendor/otools-plugin-sdk --no-frozen-lockfile
-          pnpm --dir vendor/otools-plugin-sdk build
-
-      - name: Install plugin dependencies
-        working-directory: OTools
-        run: pnpm install --dir "${{ needs.discover.outputs.adapter_root }}" --no-frozen-lockfile
+        run: pnpm --dir vendor/otools-plugin-sdk build
 
       - name: Build plugin web assets
         working-directory: OTools
-        run: pnpm --dir "${{ needs.discover.outputs.adapter_root }}" build
+        run: pnpm build:plugin -- "${{ inputs.plugin_dir }}"
 
       - uses: actions/upload-artifact@v4
         with:
