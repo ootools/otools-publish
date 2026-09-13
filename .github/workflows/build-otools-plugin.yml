@@ -259,6 +259,8 @@ jobs:
       (needs.build-web.result == 'success' || needs.build-web.result == 'skipped') &&
       (needs.build-native.result == 'success' || needs.build-native.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Clone OTools
         env:
