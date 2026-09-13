@@ -307,3 +307,19 @@ jobs:
           name: plugin-pack-${{ needs.discover.outputs.packid }}
           path: artifacts/*.oplg
           if-no-files-found: error
+
+      # Actions artifact downloads re-zip the payload, which would wrap the
+      # .oplg inside an extra zip layer. Upload it as a raw release asset so
+      # the downloaded file is the plugin package itself.
+      - name: Publish plugin release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}
+          name: ${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}
+          draft: false
+          prerelease: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: artifacts/*.oplg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
