@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest, ubuntu-latest]
+        platform: [windows-latest, macos-latest, macos-15-intel, ubuntu-latest]
 
     runs-on: ${{ matrix.platform }}
 
@@ -119,7 +119,7 @@ jobs:
             libgbm-dev
 
       - name: Install dependencies (macOS)
-        if: matrix.platform == 'macos-latest'
+        if: startsWith(matrix.platform, 'macos-')
         run: |
           brew update
           brew install unixodbc
@@ -200,6 +200,7 @@ jobs:
           matrix_platform = "${{ matrix.platform }}"
           os_key_map = {
             "macos-latest": "darwin",
+            "macos-15-intel": "darwin",
             "ubuntu-latest": "linux",
             "windows-latest": "windows",
           }
