@@ -159,8 +159,38 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Upload Release Assets (Linux/MacOS)
-        if: matrix.platform != 'windows-latest'
+      - name: Stage macOS release assets by architecture
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ needs.resolve_version.outputs.version }}"
+          if [[ "${{ matrix.platform }}" == 'macos-15-intel' ]]; then
+            platform='darwin-x86_64'
+          else
+            platform='darwin-aarch64'
+          fi
+          bundle_dir=''
+          for candidate in OTools/src-tauri/target/release/bundle OTools/target/release/bundle; do
+            if [[ -d "$candidate/macos" ]]; then
+              bundle_dir="$candidate"
+              break
+            fi
+          done
+          if [[ -z "$bundle_dir" ]]; then
+            echo 'Missing macOS app bundle directory' >&2
+            exit 1
+          fi
+          node OTools/scripts/stage-release-assets.mjs \
+            --bundle-dir "$bundle_dir" \
+            --dest "OTools/release-assets/$platform" \
+            --platform "$platform" \
+            --version "$version"
+          test -s "OTools/release-assets/$platform/OTools_${version}_${platform#darwin-}.app.tar.gz"
+          test -s "OTools/release-assets/$platform/OTools_${version}_${platform#darwin-}.app.tar.gz.sig"
+
+      - name: Upload Release Assets (Linux)
+        if: matrix.platform == 'ubuntu-latest'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.resolve_version.outputs.version }}
@@ -173,13 +203,28 @@ jobs:
             OTools/target/**/bundle/**/*.AppImage
             OTools/target/**/bundle/**/*.deb
             OTools/target/**/bundle/**/*.rpm
-            OTools/target/**/bundle/**/*.dmg
             OTools/target/**/bundle/**/*.sig
             OTools/src-tauri/target/release/bundle/**/*.AppImage
             OTools/src-tauri/target/release/bundle/**/*.deb
             OTools/src-tauri/target/release/bundle/**/*.rpm
-            OTools/src-tauri/target/release/bundle/**/*.dmg
             OTools/src-tauri/target/release/bundle/**/*.sig
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Release Assets (macOS)
+        if: startsWith(matrix.platform, 'macos-')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.resolve_version.outputs.version }}
+          name: OTools-v${{ needs.resolve_version.outputs.version }}
+          draft: true
+          prerelease: false
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            OTools/release-assets/**/*.dmg
+            OTools/release-assets/**/*.app.tar.gz
+            OTools/release-assets/**/*.app.tar.gz.sig
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -249,10 +294,15 @@ jobs:
           }
 
           candidates = []
-          for pattern in (
-            "target/**/bundle/**/*.sig",
-            "src-tauri/target/release/bundle/**/*.sig",
-          ):
+          signature_patterns = (
+            ("release-assets/**/*.app.tar.gz.sig",)
+            if os_key == "darwin"
+            else (
+              "target/**/bundle/**/*.sig",
+              "src-tauri/target/release/bundle/**/*.sig",
+            )
+          )
+          for pattern in signature_patterns:
             for sig_path in glob.glob(pattern, recursive=True):
               artifact_path = sig_path[:-4] if sig_path.endswith(".sig") else ""
               if not artifact_path or not os.path.isfile(artifact_path):
