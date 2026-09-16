@@ -69,6 +69,8 @@ jobs:
       version: ${{ steps.meta.outputs.version }}
       has_web: ${{ steps.meta.outputs.has_web }}
       has_native: ${{ steps.meta.outputs.has_native }}
+      has_logo: ${{ steps.meta.outputs.has_logo }}
+      logo_path: ${{ steps.meta.outputs.logo_path }}
     steps:
       - name: Clone OTools
         env:
@@ -106,9 +108,35 @@ jobs:
           )
           meta = json.loads(raw)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-              for key in ("adapter_root", "packid", "uuid", "version", "has_web", "has_native"):
-                  fh.write(f"{key}={meta.get(key, '')}\n")
+              for key in (
+                  "adapter_root",
+                  "packid",
+                  "uuid",
+                  "version",
+                  "has_web",
+                  "has_native",
+                  "has_logo",
+                  "logo_path",
+              ):
+                  value = meta.get(key, "")
+                  if isinstance(value, bool):
+                      value = "true" if value else "false"
+                  fh.write(f"{key}={value}\n")
           PY
+
+      # 直接检查文件，不依赖 plugin_pack.py 的输出格式，
+      # 也不受 otools_ref 指向旧版本分支的影响。
+      - name: Require plugin logo
+        shell: bash
+        run: |
+          logo="OTools/plugins/${{ inputs.plugin_dir }}/logo.svg"
+          if [ ! -f "$logo" ]; then
+            echo "插件市场要求每个插件根目录必须提供 logo.svg，当前未找到：" >&2
+            echo "  plugins/${{ inputs.plugin_dir }}/logo.svg" >&2
+            echo "请先补充该文件后重新发布。" >&2
+            exit 1
+          fi
+          echo "插件 logo: $logo"
 
   build-web:
     needs: discover
@@ -353,3 +381,123 @@ jobs:
           files: artifacts/*.oplg
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 把本次发布同步到插件市场：
+  # 1. 校验插件根目录的 logo.svg（discover 已校验，这里再兜底一次）；
+  # 2. 把 logo.svg 提交到 otools-website 仓库，由 Pages 站点托管为
+  #    <站点根>/plugin-logos/<packid>.svg；
+  # 3. 调用 xycloud 的插件发布接口，插件不存在则创建，存在则更新元信息、
+  #    .oplg 包地址与 logo 线上地址。
+  sync-market:
+    needs:
+      - discover
+      - package
+    if: needs.package.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    # 多个插件同时发布时串行同步，避免并发推送 otools-website 冲突
+    concurrency:
+      group: sync-plugin-market
+      cancel-in-progress: false
+    steps:
+      - name: Checkout publish repo
+        uses: actions/checkout@v4
+        with:
+          path: publish
+
+      - name: Clone OTools
+        env:
+          OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
+          OTOOLS_REF: ${{ github.event.inputs.otools_ref }}
+        run: |
+          if [ -z "$OTOOLS_TOKEN" ]; then
+            echo "Missing secret OTOOLS_REPO_TOKEN"
+            exit 1
+          fi
+          git clone --depth 1 --branch "$OTOOLS_REF" "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/OTools.git" OTools
+          cd OTools
+          git submodule set-url vendor/otools-plugin-sdk "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/otools-plugin-sdk.git"
+          git submodule set-url vendor/tauri-remote-service "https://x-access-token:${OTOOLS_TOKEN}@github.com/ootools/tauri-remote-service.git"
+          git submodule sync --recursive
+          git submodule update --init --recursive
+
+      - name: Checkout otools-website
+        uses: actions/checkout@v4
+        with:
+          repository: ootools/otools-website
+          ref: master
+          path: otools-website
+          # 不能用 GITHUB_TOKEN：它触发的 push 不会再触发 otools-website 的
+          # Pages 部署工作流。若 OTOOLS_REPO_TOKEN 对 otools-website 有写权限，
+          # 可以不额外配置 OTOOLS_WEBSITE_TOKEN。
+          token: ${{ secrets.OTOOLS_WEBSITE_TOKEN || secrets.OTOOLS_REPO_TOKEN }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Verify plugin package asset
+        env:
+          PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}/${{ needs.discover.outputs.packid }}-${{ needs.discover.outputs.version }}.oplg
+        run: |
+          set -euo pipefail
+          code="$(curl -sSL -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 3 "$PACKAGE_URL" || true)"
+          if [ "$code" != "200" ]; then
+            echo "插件包地址不可用($code): $PACKAGE_URL" >&2
+            exit 1
+          fi
+          echo "插件包地址可用: $PACKAGE_URL"
+
+      # 先把 logo 落到官网仓库并推送，让 logo 线上地址可用后再写入插件市场。
+      - name: Sync plugin logo
+        id: sync
+        run: |
+          set -euo pipefail
+          python publish/scripts/sync-plugin-market.py \
+            --plugin-dir "OTools/plugins/${{ inputs.plugin_dir }}" \
+            --website-dir otools-website \
+            --release-repo "${{ github.repository }}" \
+            --release-tag "plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}" \
+            --packid "${{ needs.discover.outputs.packid }}" \
+            --version "${{ needs.discover.outputs.version }}" \
+            --website-base-url "${{ vars.OTOOLS_WEBSITE_BASE_URL || 'https://otools.lingyun.net' }}" \
+            --skip-submit
+
+      # 用 PAT 推送，才能触发 otools-website 的 Pages 部署工作流。
+      - name: Commit and push plugin logo
+        if: steps.sync.outputs.logo_changed == 'true'
+        working-directory: otools-website
+        run: |
+          set -euo pipefail
+          git config user.name "otools-publish-bot"
+          git config user.email "otools-publish-bot@users.noreply.github.com"
+          git add "public/plugin-logos/${{ needs.discover.outputs.packid }}.svg"
+          if git diff --cached --quiet; then
+            echo "logo 无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore(plugin-logos): 同步 ${{ needs.discover.outputs.packid }} v${{ needs.discover.outputs.version }} logo"
+          git pull --rebase origin master
+          git push origin HEAD:master
+
+      - name: Submit plugin metadata to market
+        env:
+          OTOOLS_MARKET_TOKEN: ${{ secrets.OTOOLS_MARKET_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$OTOOLS_MARKET_TOKEN" ]; then
+            echo "Missing secret OTOOLS_MARKET_TOKEN" >&2
+            exit 1
+          fi
+          python publish/scripts/sync-plugin-market.py \
+            --plugin-dir "OTools/plugins/${{ inputs.plugin_dir }}" \
+            --website-dir otools-website \
+            --release-repo "${{ github.repository }}" \
+            --release-tag "plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}" \
+            --packid "${{ needs.discover.outputs.packid }}" \
+            --version "${{ needs.discover.outputs.version }}" \
+            --api-url "${{ vars.OTOOLS_MARKET_API || 'https://otools-api.lingyun.net/api/v1/otools/plugin/publish' }}" \
+            --website-base-url "${{ vars.OTOOLS_WEBSITE_BASE_URL || 'https://otools.lingyun.net' }}" \
+            --skip-logo \
+            --token "$OTOOLS_MARKET_TOKEN"
