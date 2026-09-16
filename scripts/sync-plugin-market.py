@@ -246,6 +246,14 @@ def main() -> None:
         f"action={action} id={data.get('id', '')} msg={result.get('msg', '')}"
     )
 
+    # 版本表写入失败不会阻断发布，但要显式提示，避免静默丢数据
+    version_error = str(data.get("versionError") or "").strip()
+    if version_error:
+        print(
+            f"[sync-plugin-market] 警告: 版本记录写入失败（不影响插件发布）: {version_error}",
+            file=sys.stderr,
+        )
+
     outputs["market_action"] = action
     write_github_output(outputs)
 
