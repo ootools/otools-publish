@@ -82,6 +82,24 @@ def copy_logo(logo_path: Path, website_dir: Path, packid: str) -> tuple[Path, bo
     return target, True
 
 
+def compact(payload: dict) -> dict:
+    """去掉空值字段。
+
+    后台的截图、最低宿主版本等字段是人工维护的，plugin.json 里没有声明时
+    不应该带着空值提交，否则每次发布都会把它们清空。
+    """
+    result = {}
+    for key, value in payload.items():
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                continue
+        elif isinstance(value, (list, dict)) and not value:
+            continue
+        result[key] = value
+    return result
+
+
 def build_payload(
     manifest: dict,
     packid: str,
@@ -90,29 +108,34 @@ def build_payload(
     package_url: str,
     official: bool,
 ) -> dict:
-    categories = ["official"] if official else []
-    return {
-        "packid": packid,
-        "uuid": str(manifest.get("uuid") or packid).strip(),
-        "displayName": str(manifest.get("displayName") or packid).strip(),
-        "displayNameCN": str(manifest.get("displayNameCN") or "").strip(),
-        "developerName": str(manifest.get("developerName") or "").strip(),
-        "summary": str(manifest.get("summary") or "").strip(),
-        "version": version,
-        "minOToolsVersion": str(
-            manifest.get("minOToolsVersion") or manifest.get("minOtoolsVersion") or ""
-        ).strip(),
-        "icon": str(manifest.get("icon") or "").strip(),
-        "logo": logo_url,
-        "entry": str(manifest.get("entry") or "").strip(),
-        "categories": categories,
-        "screenshots": manifest.get("screenshots") or [],
-        "packageUrl": package_url,
-        "official": official,
-        "supportMacos": True,
-        "supportWindows": True,
-        "supportLinux": True,
-    }
+    """构造提交给插件市场的插件元信息。
+
+    注意：不提交 categories —— 该字段包含 hot / featured 等人工运营标签，
+    官方分类由后端按 official 标记合并，避免覆盖运营配置。
+    """
+    return compact(
+        {
+            "packid": packid,
+            "uuid": str(manifest.get("uuid") or packid).strip(),
+            "displayName": str(manifest.get("displayName") or packid).strip(),
+            "displayNameCN": str(manifest.get("displayNameCN") or "").strip(),
+            "developerName": str(manifest.get("developerName") or "").strip(),
+            "summary": str(manifest.get("summary") or "").strip(),
+            "version": version,
+            "minOToolsVersion": str(
+                manifest.get("minOToolsVersion") or manifest.get("minOtoolsVersion") or ""
+            ).strip(),
+            "icon": str(manifest.get("icon") or "").strip(),
+            "logo": logo_url,
+            "entry": str(manifest.get("entry") or "").strip(),
+            "screenshots": manifest.get("screenshots") or [],
+            "packageUrl": package_url,
+            "official": official,
+            "supportMacos": True,
+            "supportWindows": True,
+            "supportLinux": True,
+        }
+    )
 
 
 def submit_payload(api_url: str, token: str, payload: dict, timeout: int) -> dict:

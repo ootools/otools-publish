@@ -115,23 +115,36 @@ class SyncPluginMarketTests(unittest.TestCase):
             True,
         )
         self.assertEqual(payload["packid"], "otools-git")
+        self.assertEqual(payload["uuid"], "otools-git")
         self.assertEqual(payload["displayNameCN"], "章鱼Git")
         self.assertEqual(payload["logo"], "https://otools.lingyun.net/plugin-logos/otools-git.svg")
         self.assertTrue(payload["packageUrl"].endswith("a.oplg"))
-        self.assertEqual(payload["categories"], ["official"])
         self.assertTrue(payload["official"])
+        self.assertIs(payload["supportMacos"], True)
 
-        unofficial = module.build_payload(
-            manifest, "otools-git", "0.1.0", "logo", "pkg", False
-        )
-        self.assertEqual(unofficial["categories"], [])
-        self.assertFalse(unofficial["official"])
+    def test_build_payload_omits_curated_fields(self) -> None:
+        """截图、最低宿主版本等由后台人工维护，plugin.json 未声明时不能提交空值覆盖。"""
+        manifest = json.loads((make_plugin() / "plugin.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest.get("screenshots"), [])
+        self.assertNotIn("minOToolsVersion", manifest)
+
+        payload = module.build_payload(manifest, "otools-git", "0.1.0", "logo", "pkg", True)
+        self.assertNotIn("screenshots", payload, "空截图不应提交，否则会清空后台已有截图")
+        self.assertNotIn("minOToolsVersion", payload, "未声明的最低版本不应提交")
+        # categories 含 hot / featured 等运营标签，交由后端按 official 合并，不能整体覆盖
+        self.assertNotIn("categories", payload)
+
+    def test_build_payload_keeps_declared_screenshots(self) -> None:
+        manifest = json.loads((make_plugin() / "plugin.json").read_text(encoding="utf-8"))
+        manifest["screenshots"] = ["https://a.png"]
+        payload = module.build_payload(manifest, "otools-git", "0.1.0", "logo", "pkg", True)
+        self.assertEqual(payload["screenshots"], ["https://a.png"])
 
     def test_build_payload_falls_back_to_packid(self) -> None:
         payload = module.build_payload({}, "otools-x", "1.0.0", "logo", "pkg", True)
         self.assertEqual(payload["uuid"], "otools-x")
         self.assertEqual(payload["displayName"], "otools-x")
-        self.assertEqual(payload["summary"], "")
+        self.assertNotIn("summary", payload)
 
     def test_write_github_output(self) -> None:
         output = Path(tempfile.mkdtemp()) / "github_output"
