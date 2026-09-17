@@ -405,6 +405,13 @@ jobs:
             ${{ steps.changelog.outputs.changelog }}
           draft: false
           prerelease: false
+          # 不能让插件发布抢走宿主的 Latest 标记：宿主更新端点用的是
+          #   .../releases/latest/download/latest.json
+          # 而 GitHub 的 Latest = 「最新的非草稿、非预发布 release」，
+          # 插件发得比宿主晚时 Latest 会落到插件 release 上，它没有 latest.json 资产，
+          # 于是所有客户端「检查更新」都报
+          #   Could not fetch a valid release JSON from the remote
+          make_latest: false
           overwrite_files: true
           fail_on_unmatched_files: true
           files: artifacts/*.oplg
