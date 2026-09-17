@@ -392,7 +392,13 @@ jobs:
     needs:
       - discover
       - package
-    if: needs.package.result == 'success'
+    # 这里必须显式带一个状态函数，否则会被 GitHub 的隐式 success() 判死。
+    # package 的 needs 里有 build-native；纯 web 插件（plugin.json 的 native.enabled
+    # 为 false，如 otools-idphoto）会让 build-native 变成 skipped，而 job 级 if 在未使用
+    # 状态函数时会被隐式加上 success()，success() 对「依赖闭包中存在 skipped 的 job」
+    # 返回 false —— 结果就是 needs.package.result == 'success' 明明成立，job 仍被跳过。
+    # 用 !cancelled() 抵消该隐式判断（比 always() 更严谨：取消运行时不再继续同步市场）。
+    if: ${{ !cancelled() && needs.package.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
