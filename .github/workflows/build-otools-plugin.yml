@@ -291,6 +291,10 @@ jobs:
       - discover
       - build-web
       - build-native
+    outputs:
+      # 插件专属的更新说明（按 plugins/<插件目录> 过滤提交生成）。
+      # 本 job 用它写 Release body，sync-market 用它同步到插件市场。
+      changelog: ${{ steps.changelog.outputs.changelog }}
     if: |
       always() &&
       needs.discover.result == 'success' &&
@@ -369,11 +373,36 @@ jobs:
       # Actions artifact downloads re-zip the payload, which would wrap the
       # .oplg inside an extra zip layer. Upload it as a raw release asset so
       # the downloaded file is the plugin package itself.
+      - uses: actions/checkout@v4
+        with:
+          path: publish
+
+      # 生成插件自己的更新说明：按 plugins/<插件目录> 过滤提交，
+      # 所以只包含本插件的改动，不会串进宿主或其他插件的提交。
+      # 拿不到提交（例如首次发布、令牌失效）时输出为空，不阻断发布。
+      - name: Build plugin changelog
+        id: changelog
+        continue-on-error: true
+        env:
+          OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          python publish/scripts/build-plugin-changelog.py \
+            --plugin-dir "${{ inputs.plugin_dir }}" \
+            --packid "${{ needs.discover.outputs.packid }}" \
+            --version "${{ needs.discover.outputs.version }}" \
+            --token "$OTOOLS_TOKEN" \
+            --github-output
+
       - name: Publish plugin release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}
           name: ${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}
+          body: |
+            ## ${{ needs.discover.outputs.packid }} v${{ needs.discover.outputs.version }}
+
+            ${{ steps.changelog.outputs.changelog }}
           draft: false
           prerelease: false
           overwrite_files: true
@@ -503,6 +532,7 @@ jobs:
             --release-tag "plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}" \
             --packid "${{ needs.discover.outputs.packid }}" \
             --version "${{ needs.discover.outputs.version }}" \
+            --changelog "${{ needs.package.outputs.changelog }}" \
             --api-url "${{ vars.OTOOLS_MARKET_API || 'https://otools-api.lingyun.net/api/v1/otools/plugin/publish' }}" \
             --website-base-url "${{ vars.OTOOLS_WEBSITE_BASE_URL || 'https://otools.lingyun.net' }}" \
             --skip-logo \

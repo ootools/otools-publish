@@ -107,11 +107,16 @@ def build_payload(
     logo_url: str,
     package_url: str,
     official: bool,
+    changelog: str = "",
 ) -> dict:
     """构造提交给插件市场的插件元信息。
 
     注意：不提交 categories —— 该字段包含 hot / featured 等人工运营标签，
     官方分类由后端按 official 标记合并，避免覆盖运营配置。
+
+    ``changelog`` 是该版本的更新说明（通常由 build-plugin-changelog.py 按插件目录
+    过滤提交生成）。留空时不提交该字段 —— compact() 会剥掉空值，避免用空串
+    覆盖后台人工维护的说明。
     """
     return compact(
         {
@@ -122,6 +127,7 @@ def build_payload(
             "developerName": str(manifest.get("developerName") or "").strip(),
             "summary": str(manifest.get("summary") or "").strip(),
             "version": version,
+            "changelog": str(changelog or "").strip(),
             "minOToolsVersion": str(
                 manifest.get("minOToolsVersion") or manifest.get("minOtoolsVersion") or ""
             ).strip(),
@@ -190,6 +196,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--release-tag", default="", help="发布 .oplg 的 Release tag")
     parser.add_argument("--packid", default="", help="覆盖 plugin.json 中的 packid")
     parser.add_argument("--version", default="", help="覆盖 plugin.json 中的 version")
+    parser.add_argument(
+        "--changelog",
+        default="",
+        help="该版本的更新说明（多行文本）；留空则不提交该字段，避免覆盖后台人工维护的内容",
+    )
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help="插件市场发布接口地址")
     parser.add_argument("--website-base-url", default=DEFAULT_WEBSITE_BASE_URL, help="官网站点根地址")
     parser.add_argument("--token", default="", help="插件市场发布令牌")
@@ -227,7 +238,9 @@ def main() -> None:
     logo_url = f"{args.website_base_url.rstrip('/')}/{LOGO_DIR_NAME}/{packid}.svg"
     official = not args.no_official
 
-    payload = build_payload(manifest, packid, version, logo_url, package_url, official)
+    payload = build_payload(
+        manifest, packid, version, logo_url, package_url, official, args.changelog
+    )
 
     print(f"[sync-plugin-market] 插件: {packid} v{version}")
     print(f"[sync-plugin-market] logo: {logo_path}")

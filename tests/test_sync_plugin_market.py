@@ -140,6 +140,26 @@ class SyncPluginMarketTests(unittest.TestCase):
         payload = module.build_payload(manifest, "otools-git", "0.1.0", "logo", "pkg", True)
         self.assertEqual(payload["screenshots"], ["https://a.png"])
 
+    def test_build_payload_includes_changelog(self) -> None:
+        """更新说明由流水线按插件目录生成，多行文本要原样带过去。"""
+        manifest = json.loads((make_plugin() / "plugin.json").read_text(encoding="utf-8"))
+        payload = module.build_payload(
+            manifest, "otools-git", "0.1.0", "logo", "pkg", True, "- 修好树展开\n- 新增导出"
+        )
+        self.assertEqual(payload["changelog"], "- 修好树展开\n- 新增导出")
+
+    def test_build_payload_omits_empty_changelog(self) -> None:
+        """没生成说明时不提交该字段，避免用空串覆盖后台人工维护的内容。"""
+        manifest = json.loads((make_plugin() / "plugin.json").read_text(encoding="utf-8"))
+        self.assertNotIn(
+            "changelog",
+            module.build_payload(manifest, "otools-git", "0.1.0", "logo", "pkg", True),
+        )
+        self.assertNotIn(
+            "changelog",
+            module.build_payload(manifest, "otools-git", "0.1.0", "logo", "pkg", True, "   "),
+        )
+
     def test_build_payload_falls_back_to_packid(self) -> None:
         payload = module.build_payload({}, "otools-x", "1.0.0", "logo", "pkg", True)
         self.assertEqual(payload["uuid"], "otools-x")
