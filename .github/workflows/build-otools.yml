@@ -388,6 +388,18 @@ jobs:
           pattern: latest-json-*
           merge-multiple: true
 
+      - name: Generate host changelog
+        id: changelog
+        continue-on-error: true
+        env:
+          OTOOLS_TOKEN: ${{ secrets.OTOOLS_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          python scripts/build-host-changelog.py \
+            --version "${{ needs.resolve_version.outputs.version }}" \
+            --token "$OTOOLS_TOKEN" \
+            --github-output --output changelog.txt
+
       - name: Merge updater latest.json
         shell: bash
         run: |
@@ -398,6 +410,7 @@ jobs:
           import os
           import urllib.request
           import urllib.error
+          from datetime import datetime, timezone
 
           version = "${{ needs.resolve_version.outputs.version }}"
           expected_version = version.lstrip("v")
@@ -467,10 +480,16 @@ jobs:
           if not merged_platforms:
             raise SystemExit("Merged updater manifest has no valid platforms.")
 
+          changelog_path = "changelog.txt"
+          host_changelog = ""
+          if os.path.isfile(changelog_path):
+              with open(changelog_path, "r", encoding="utf-8") as _cf:
+                  host_changelog = _cf.read().strip()
+          notes = host_changelog or merged_notes or "See the assets to download this version and install."
           output = {
             "version": expected_version,
-            "notes": merged_notes or "See the assets to download this version and install.",
-            "pub_date": merged_pub_date,
+            "notes": notes,
+            "pub_date": merged_pub_date or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "platforms": dict(sorted(merged_platforms.items(), key=lambda pair: pair[0])),
           }
           with open("latest.json", "w", encoding="utf-8") as out:
@@ -482,6 +501,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.resolve_version.outputs.version }}
+          body_path: changelog.txt
           files: latest.json
           fail_on_unmatched_files: true
           overwrite_files: true
