@@ -257,7 +257,8 @@ jobs:
             pkg-config \
             unixodbc \
             unixodbc-dev \
-            libgbm-dev
+            libgbm-dev \
+            libxdo-dev
 
       - name: Install dependencies (macOS)
         if: matrix.platform == 'macos'
