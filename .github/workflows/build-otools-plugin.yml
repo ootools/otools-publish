@@ -50,6 +50,7 @@ on:
           - otools-portkill
           - otools-reqwall
           - otools-resume-helper
+          - otools-scrcpy
           - otools-seal-play
           - otools-servrun
           - otools-sslgo
@@ -357,6 +358,13 @@ jobs:
           lipo -create "$arm_path" "$intel_path" -output "$universal_path"
           codesign --force --sign - --timestamp=none "$universal_path"
           rm -f "$arm_path" "$intel_path"
+
+      # 声明了 bundle.androidPlatformTools 的插件（如 otools-scrcpy）需要随包分发 adb，
+      # 这里在打包前把三平台的 platform-tools + scrcpy-server stage 进插件目录。未声明的插件脚本会跳过。
+      - name: Stage bundled plugin binaries
+        shell: bash
+        run: |
+          python OTools/scripts/fetch-plugin-bundles.py --plugin-dir "OTools/plugins/${{ inputs.plugin_dir }}"
 
       - name: Pack plugin zip
         shell: bash
