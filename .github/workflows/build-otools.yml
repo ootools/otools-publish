@@ -150,6 +150,53 @@ jobs:
           prerelease: false
           uploadUpdaterJson: false
 
+      # 崩溃诊断依赖符号：Windows 上 LocalDumps 抓到的 minidump 若没有匹配的
+      # PDB 就无法把地址还原成函数名，排查就只能靠猜。
+      # 根 Cargo.toml 的 [profile.release] 设 debug = 1（行号表），因此这里
+      # 需要收集 PDB。
+      #
+      # ⚠️ 只上传到 CI artifact，**不进 release 资产**。PDB 能把 exe 还原成
+      # 带函数名/行号的结构，随release 公开等于把内部实现交给任何人。
+      # 自用排查时从本次运行的 Actions 页下载 artifact 即可。
+      # 暂存目录刻意放在 release-assets/ 之外，避免被下面的 assets glob 误捞。
+      - name: Stage Debug Symbols (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = "${{ needs.resolve_version.outputs.version }}"
+          $stageDir = "OTools/debug-symbols"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+
+          # tauri-action 的构建产物目录，两个候选都检查一遍。
+          $pdbs = @()
+          foreach ($candidate in @(
+              "OTools/src-tauri/target/release",
+              "OTools/target/release")) {
+            if (Test-Path $candidate) {
+              $pdbs += Get-ChildItem -Path $candidate -Filter '*.pdb' -Recurse -ErrorAction SilentlyContinue
+            }
+          }
+          if ($pdbs.Count -eq 0) {
+            Write-Host "No PDB produced; debug=1 in [profile.release] may have been overridden." -Warning
+            exit 0
+          }
+
+          foreach ($pdb in $pdbs) {
+            $dest = Join-Path $stageDir ("{0}_{1}.pdb" -f $pdb.BaseName, $version)
+            Copy-Item -Path $pdb.FullName -Destination $dest -Force
+            Write-Host "Staged $dest"
+          }
+
+      - name: Upload Debug Symbols artifact (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: otools-debug-symbols-${{ needs.resolve_version.outputs.version }}
+          path: OTools/debug-symbols/*.pdb
+          if-no-files-found: warn
+          retention-days: 90
+
       - name: Build the App (Linux/MacOS)
         if: matrix.platform != 'windows-latest'
         working-directory: OTools
