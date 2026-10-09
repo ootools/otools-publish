@@ -278,9 +278,14 @@ jobs:
         if: matrix.platform == 'windows'
         run: choco install sqlserver-odbcdriver -y --no-progress
 
+      # 用 --no-frozen-lockfile（与宿主 build-otools.yml 一致）：
+      # 新增 workspace 成员（vendor/otools-plugin-shared）或插件新增 workspace 依赖后，
+      # pnpm-lock.yaml 需要重新生成；而本机无法在缺子模块的环境下正确重生成，
+      # 所以 CI 侧容忍锁文件漂移，由 pnpm 自行解析。若哪天锁文件能保持同步，
+      # 应改回 --frozen-lockfile 以获得可复现安装。
       - name: Install shared frontend dependencies
         working-directory: OTools
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build otools-plugin-sdk
         working-directory: OTools
