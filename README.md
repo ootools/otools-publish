@@ -8,6 +8,64 @@ OTools 宿主与插件的发布仓库，只存放 GitHub Actions 工作流与发
 | --- | --- |
 | `build-otools.yml` | 构建并发布 OTools 宿主安装包与更新清单 |
 | `build-otools-plugin.yml` | 构建并发布单个插件（`.oplg`），并同步到插件市场 |
+| `build-otools-plugin-standalone.yml` | 构建并发布单个插件的**独立桌面 APP**（安装包 + 专属更新清单） |
+
+> `.oplg` 插件包与独立 APP 是**两条独立的发布线**，tag 与更新端点都分开，互不影响。
+
+## 插件独立 APP 发布流程（`build-otools-plugin-standalone.yml`）
+
+把某个插件打成可独立安装运行的桌面应用（与宿主同源，但只带该插件的功能）。
+
+手动触发，选择插件目录后依次执行：
+
+1. **discover**：读 `plugin.json` 与 `app/tauri.conf.json`，解析 packid / 版本 / identifier，
+   并校验插件目录里已有 `app/` 壳；
+2. **build-app**：4 平台矩阵（Windows / Linux / macOS arm64 / macOS x64）
+   构建前端 → 校验壳未漂移 → 构建 APP → 上传安装包 → 生成该平台的更新清单片段；
+3. **publish-manifest**：合并各平台片段成 `latest.json`，写入该插件的**固定 tag**。
+
+### tag 与更新端点约定
+
+| 用途 | tag | 内容 |
+| --- | --- | --- |
+| 更新端点（**稳定**） | `plugin-app-<packid>` | 只有 `latest.json`，每次发布覆盖 |
+| 安装包（保留历史） | `plugin-app-<packid>-v<version>` | `.dmg` / `.app.tar.gz` / `-setup.exe` / `.AppImage` … + `.sig` |
+
+```
+更新端点：https://github.com/ootools/otools-publish/releases/download/plugin-app-<packid>/latest.json
+```
+
+**为什么不用宿主的 `/releases/latest/`**：GitHub 的 Latest = 「最新的非草稿、非预发布 release」。
+插件发得比宿主晚时 Latest 会落到插件 release 上，而它没有 `latest.json` 资产，
+于是**所有宿主客户端**的「检查更新」都会报
+`Could not fetch a valid release JSON from the remote`。
+
+固定 tag 承载 `latest.json` 是同一问题的对称解法。因此：
+
+- 所有插件 APP 的发布步骤**必须** `make_latest: false`（`tests/test_workflows.py` 会守住这条）；
+- 宿主发布（`build-otools.yml`）恰恰**不能**禁用 `make_latest`，否则它自己的端点就失效了。
+
+### 前端与签名
+
+- **必须先构建前端**：`tauri.conf.json` 的 `frontendDist` 指向 `plugins/<x>/dist`，
+  它不存在会在 `generate_context!` 阶段**编译期**报错。工作流里由
+  `scripts/build-plugin-app-tauri.mjs` 统一处理（含 macOS 的简化 DMG 打包）。
+- 更新签名需要 `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；
+  缺少时构建仍会通过，但产不出 `.sig`，脚本会直接失败 —— 没有签名就无法自动更新。
+- macOS 上绕过 Tauri 内置 DMG 打包（它走 Finder AppleScript，CI 里不可靠），
+  改为「只打 `.app` + `hdiutil` 造简化 DMG」，与宿主 `scripts/run-tauri.js` 同一套思路。
+
+### 前置：插件目录要有 `app/` 壳
+
+壳是生成物，由 OTools 仓库的脚本产出并提交：
+
+```bash
+# 在 OTools 仓库里
+pnpm build:plugin-app -- plugins/otools-git      # 生成/更新
+pnpm check:plugin-app                            # 校验是否漂移
+```
+
+目前只有 `otools-git` 铺开了壳；其余插件选到会在 **discover** 阶段明确失败并提示修复命令。
 
 ## 插件发布流程（`build-otools-plugin.yml`）
 
@@ -59,10 +117,15 @@ python scripts/sync-plugin-market.py \
 
 ```bash
 python tests/test_sync_plugin_market.py
+python tests/test_build_plugin_changelog.py
+python tests/test_build_plugin_app_latest_json.py
+python tests/test_workflows.py
 ```
 
-覆盖包地址拼装、logo 拷贝与变更检测、提交内容契约、`GITHUB_OUTPUT` 写出，以及
-`--dry-run` / `--skip-submit` / 缺令牌 等分支。
+覆盖包地址拼装、logo 拷贝与变更检测、提交内容契约、`GITHUB_OUTPUT` 写出，
+`--dry-run` / `--skip-submit` / 缺令牌 等分支；独立 APP 更新清单的
+包型识别、平台/架构映射、URL 编码（`productName` 含空格）、片段合并；
+以及工作流的发布安全不变量（插件发布必须 `make_latest: false`，宿主发布必须不禁用）。
 
 ## 配置
 

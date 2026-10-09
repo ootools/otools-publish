@@ -31,6 +31,7 @@ DEFAULT_API_BASE = "https://api.github.com"
 DEFAULT_SOURCE_REPO = "ootools/OTools"  # 插件源码所在仓库
 DEFAULT_RELEASE_REPO = "ootools/otools-publish"  # 插件 Release 所在仓库
 DEFAULT_PATH_PREFIX = "plugins"
+DEFAULT_TAG_PREFIX = "plugin"  # `.oplg` 包用 `plugin-<packid>-v<version>`；独立 APP 用 `plugin-app-<packid>-v<version>`
 DEFAULT_MAX_COMMITS = 30
 DEFAULT_TIMEOUT = 30
 MULTILINE_EOF = "CHANGELOG_EOF"
@@ -55,19 +56,24 @@ def plugin_source_path(plugin_dir: str, prefix: str = DEFAULT_PATH_PREFIX) -> st
     return f"{prefix}/{normalized}"
 
 
-def release_tag(packid: str, version: str) -> str:
-    return f"plugin-{packid}-v{version}"
+def release_tag(packid: str, version: str, tag_prefix: str = DEFAULT_TAG_PREFIX) -> str:
+    return f"{tag_prefix}-{packid}-v{version}"
 
 
-def pick_previous_published_at(releases, packid: str, version: str) -> str:
+def pick_previous_published_at(
+    releases, packid: str, version: str, tag_prefix: str = DEFAULT_TAG_PREFIX
+) -> str:
     """取「同一个插件、上一个已发布版本」的发布时间，作为提交筛选起点。
 
-    只认 `plugin-<packid>-v*` 这组 tag，并排除本次正在发布的版本
+    只认 `<tag_prefix>-<packid>-v*` 这组 tag，并排除本次正在发布的版本
     （重跑同一版本时，本次的 tag 可能已经存在）。取不到就返回空串，
     调用方据此退化为「最近 N 条提交」。
+
+    `tag_prefix` 用于区分同一插件的两条发布线：
+    `.oplg` 包是 `plugin-<packid>-v*`，独立 APP 是 `plugin-app-<packid>-v*`。
     """
-    prefix = f"plugin-{str(packid or '').strip()}-v"
-    current = release_tag(packid, version)
+    prefix = f"{tag_prefix}-{str(packid or '').strip()}-v"
+    current = release_tag(packid, version, tag_prefix)
     best = ""
     for item in releases or []:
         if not isinstance(item, dict):
@@ -172,6 +178,11 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--source-repo", default=DEFAULT_SOURCE_REPO, help="插件源码仓库 owner/repo")
     parser.add_argument("--release-repo", default=DEFAULT_RELEASE_REPO, help="插件 Release 所在仓库 owner/repo")
     parser.add_argument("--path-prefix", default=DEFAULT_PATH_PREFIX, help="源码仓库里插件的根目录前缀")
+    parser.add_argument(
+        "--tag-prefix",
+        default=DEFAULT_TAG_PREFIX,
+        help="发布 tag 前缀：`.oplg` 用 plugin（默认），独立 APP 用 plugin-app",
+    )
     parser.add_argument("--api-base", default=DEFAULT_API_BASE, help="GitHub API 根地址")
     parser.add_argument("--token", default="", help="GitHub 令牌（读私有仓库时必需）")
     parser.add_argument("--max-commits", type=int, default=DEFAULT_MAX_COMMITS, help="最多收录多少条提交")
@@ -207,7 +218,7 @@ def main(argv=None) -> None:
             args.token,
             args.timeout,
         )
-        since = pick_previous_published_at(releases, packid, version)
+        since = pick_previous_published_at(releases, packid, version, args.tag_prefix)
         if since:
             print(f"[build-plugin-changelog] 上一版发布于 {since}，取其之后的提交")
         else:

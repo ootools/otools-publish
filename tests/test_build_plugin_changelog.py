@@ -148,5 +148,35 @@ class GithubOutputTests(unittest.TestCase):
                 os.environ["GITHUB_OUTPUT"] = previous
 
 
+class TagPrefixTests(unittest.TestCase):
+    """独立 APP 用 `plugin-app-<packid>-v*`，不能和 `.oplg` 的 `plugin-<packid>-v*` 串线。"""
+
+    def test_release_tag_default(self) -> None:
+        self.assertEqual(module.release_tag("otools-git", "0.2.6"), "plugin-otools-git-v0.2.6")
+
+    def test_release_tag_custom_prefix(self) -> None:
+        self.assertEqual(
+            module.release_tag("otools-git", "0.2.6", "plugin-app"),
+            "plugin-app-otools-git-v0.2.6",
+        )
+
+    def test_pick_previous_ignores_other_release_line(self) -> None:
+        releases = [
+            {"tag_name": "plugin-app-otools-git-v0.2.6", "published_at": "2026-10-01T00:00:00Z"},
+            {"tag_name": "plugin-app-otools-git-v0.2.5", "published_at": "2026-09-01T00:00:00Z"},
+            {"tag_name": "plugin-otools-git-v0.9.9", "published_at": "2026-10-08T00:00:00Z"},
+        ]
+        # 指定 plugin-app 前缀时，.oplg 那条更晚的发布不能被算进来
+        self.assertEqual(
+            module.pick_previous_published_at(releases, "otools-git", "0.2.6", "plugin-app"),
+            "2026-09-01T00:00:00Z",
+        )
+        # 默认前缀时，只看 .oplg 那条
+        self.assertEqual(
+            module.pick_previous_published_at(releases, "otools-git", "0.2.6"),
+            "2026-10-08T00:00:00Z",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
