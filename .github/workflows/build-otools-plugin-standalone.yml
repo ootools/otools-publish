@@ -299,6 +299,21 @@ jobs:
         working-directory: OTools
         run: node scripts/build-plugin-app.mjs "plugins/${{ inputs.plugin_dir }}" --check
 
+      # 独立 APP 壳依赖宿主的 `app_lib` crate，而宿主 `src-tauri` 的
+      # `tauri::generate_context!()` 在**编译期**要求 `src-tauri/tauri.conf.json` 的
+      # frontendDist（`../dist`，即仓库根 `dist/`）存在，否则 panic：
+      #   "The `frontendDist` configuration is set to `../dist` but this path doesn't exist"
+      # 发布线不构建宿主前端（那是 build-otools.yml 的职责），所以这里放一个占位。
+      - name: Ensure host frontend dist placeholder
+        shell: bash
+        working-directory: OTools
+        run: |
+          mkdir -p dist
+          if [ ! -f dist/index.html ]; then
+            printf '%s' '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>OTools</title></head><body></body></html>' > dist/index.html
+          fi
+          ls -la dist
+
       # 先构建前端（frontendDist 指向 ../dist，不存在会导致 generate_context! 编译期报错），
       # 再以 app 目录为工程根构建 APP。macOS 上会顺带造一个简化 DMG。
       #
