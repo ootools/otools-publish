@@ -19,7 +19,7 @@
       --artifact-dir dist-artifacts --platform macos-latest \\
       --release-repo ootools/otools-publish \\
       --artifact-tag plugin-app-otools-git-v0.2.6 \\
-      --output platform-latest.json
+      --output latest-macos-latest.json
 
     # 汇总 job：把各平台片段合并成最终 latest.json
     python scripts/build-plugin-app-latest-json.py merge \\

@@ -351,13 +351,13 @@ jobs:
             --arch "${{ matrix.arch }}" \
             --release-repo "${{ github.repository }}" \
             --artifact-tag "${{ needs.discover.outputs.artifact_tag }}" \
-            --output "platform-latest.json"
+            --output "latest-${{ matrix.os }}.json"
 
       - name: Upload platform manifest
         uses: actions/upload-artifact@v4
         with:
           name: plugin-app-manifest-${{ matrix.os }}
-          path: OTools/platform-latest.json
+          path: OTools/latest-${{ matrix.os }}.json
           if-no-files-found: error
 
   publish-manifest:
