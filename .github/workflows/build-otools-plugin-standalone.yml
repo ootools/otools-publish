@@ -163,23 +163,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 产物路径都是 `OTools/target/...`：APP 壳是仓库根 workspace 的成员，
+        # cargo 的 target 目录在 workspace 根，而不是 plugins/<x>/app/target。
         include:
           - os: windows-latest
             platform: windows
             arch: x86_64
             bundles: nsis
             files: |
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/nsis/*.exe
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/nsis/*.sig
+              OTools/target/release/bundle/nsis/*.exe
+              OTools/target/release/bundle/nsis/*.sig
           - os: ubuntu-latest
             platform: linux
             arch: x86_64
             bundles: appimage,deb,rpm
             files: |
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/appimage/*.AppImage
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/appimage/*.sig
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/deb/*.deb
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/rpm/*.rpm
+              OTools/target/release/bundle/appimage/*.AppImage
+              OTools/target/release/bundle/appimage/*.sig
+              OTools/target/release/bundle/deb/*.deb
+              OTools/target/release/bundle/rpm/*.rpm
           # 这里写 dmg 是「我想要一个 DMG」的意图声明：
           # build-plugin-app-tauri.mjs 会把它改写成「只打 .app + hdiutil 造简化 DMG」，
           # 绕开 Tauri 内置 DMG 打包的 Finder AppleScript 布局（CI 里不可靠）。
@@ -188,17 +190,17 @@ jobs:
             arch: aarch64
             bundles: dmg
             files: |
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/macos/*.dmg
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/macos/*.app.tar.gz
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/macos/*.app.tar.gz.sig
+              OTools/target/release/bundle/macos/*.dmg
+              OTools/target/release/bundle/macos/*.app.tar.gz
+              OTools/target/release/bundle/macos/*.app.tar.gz.sig
           - os: macos-15-intel
             platform: macos
             arch: x86_64
             bundles: dmg
             files: |
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/macos/*.dmg
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/macos/*.app.tar.gz
-              OTools/plugins/${{ inputs.plugin_dir }}/app/target/release/bundle/macos/*.app.tar.gz.sig
+              OTools/target/release/bundle/macos/*.dmg
+              OTools/target/release/bundle/macos/*.app.tar.gz
+              OTools/target/release/bundle/macos/*.app.tar.gz.sig
 
     runs-on: ${{ matrix.os }}
 
@@ -244,9 +246,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # APP 是独立 workspace，target 目录在 app/ 下
+          # APP 壳是根 workspace 成员，target 目录在仓库根
           workspaces: |
-            OTools/plugins/${{ inputs.plugin_dir }}/app -> OTools/plugins/${{ inputs.plugin_dir }}/app/target
+            OTools -> OTools/target
           key: plugin-app-${{ inputs.plugin_dir }}-${{ matrix.os }}
 
       - name: Install dependencies (Linux)
@@ -344,7 +346,7 @@ jobs:
           set -euo pipefail
           python "$GITHUB_WORKSPACE/publish/scripts/build-plugin-app-latest-json.py" platform \
             --version "${{ needs.discover.outputs.version }}" \
-            --artifact-dir "plugins/${{ inputs.plugin_dir }}/app/target/release/bundle" \
+            --artifact-dir "target/release/bundle" \
             --platform "${{ matrix.os }}" \
             --arch "${{ matrix.arch }}" \
             --release-repo "${{ github.repository }}" \
