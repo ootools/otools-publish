@@ -299,7 +299,11 @@ jobs:
 
       # 先构建前端（frontendDist 指向 ../dist，不存在会导致 generate_context! 编译期报错），
       # 再以 app 目录为工程根构建 APP。macOS 上会顺带造一个简化 DMG。
+      #
+      # 必须显式 shell: bash —— 这段用了 `\` 续行，而 Windows runner 默认是 PowerShell，
+      # 会把 `--plugin` 当成一元运算符报 ParserError。
       - name: Build standalone app
+        shell: bash
         working-directory: OTools
         env:
           RUST_BACKTRACE: full
