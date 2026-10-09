@@ -82,6 +82,23 @@ def warn(message: str) -> None:
     print(f"[build-plugin-app-latest-json] 警告: {message}", file=sys.stderr)
 
 
+def ensure_utf8_output() -> None:
+    """把 stdout/stderr 切到 UTF-8。
+
+    Windows 上 Python 默认用 cp1252 输出，打印中文（本脚本所有提示都带中文）
+    会直接抛 UnicodeEncodeError。宿主与 `.oplg` 的脚本只在 ubuntu 上跑，没暴露过；
+    独立 APP 的清单生成要在 Windows runner 上跑，必须自己兜住。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
+
+
 def resolve_os_key(platform: str) -> str:
     """把 GitHub runner 平台名映射成 updater 的 os 键；未知平台回退 linux。"""
     normalized = str(platform or "").strip()
@@ -291,6 +308,7 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 
 def main(argv=None) -> None:
+    ensure_utf8_output()
     args = parse_args(argv)
     output_path = Path(args.output).resolve()
     output_path.parent.mkdir(parents=True, exist_ok=True)

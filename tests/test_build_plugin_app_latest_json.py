@@ -268,5 +268,37 @@ class GithubOutputTests(unittest.TestCase):
                 os.environ["GITHUB_OUTPUT"] = previous
 
 
+class EnsureUtf8OutputTests(unittest.TestCase):
+    """Windows runner 的 Python 默认是 cp1252，打印中文会 UnicodeEncodeError。"""
+
+    def test_reconfigures_both_streams(self) -> None:
+        calls = []
+
+        class FakeStream:
+            def reconfigure(self, **kwargs):
+                calls.append(kwargs)
+
+        original_out, original_err = module.sys.stdout, module.sys.stderr
+        module.sys.stdout, module.sys.stderr = FakeStream(), FakeStream()
+        try:
+            module.ensure_utf8_output()
+        finally:
+            module.sys.stdout, module.sys.stderr = original_out, original_err
+
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all(item.get("encoding") == "utf-8" for item in calls))
+
+    def test_tolerates_streams_without_reconfigure(self) -> None:
+        class LegacyStream:
+            pass
+
+        original_out, original_err = module.sys.stdout, module.sys.stderr
+        module.sys.stdout, module.sys.stderr = LegacyStream(), LegacyStream()
+        try:
+            module.ensure_utf8_output()  # 不应抛异常
+        finally:
+            module.sys.stdout, module.sys.stderr = original_out, original_err
+
+
 if __name__ == "__main__":
     unittest.main()
