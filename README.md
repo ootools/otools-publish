@@ -65,7 +65,11 @@ pnpm build:plugin-app -- plugins/otools-git      # 生成/更新
 pnpm check:plugin-app                            # 校验是否漂移
 ```
 
-目前只有 `otools-git` 铺开了壳；其余插件选到会在 **discover** 阶段明确失败并提示修复命令。
+目前 OTools 仓库里已有 23 个插件铺开了壳（`otools-aimp`、`otools-audio`、`otools-cftunnel`、
+`otools-container`、`otools-dbm`、`otools-disk`、`otools-ftp`、`otools-git`、`otools-http`、
+`otools-mqtt`、`otools-nav`、`otools-ngork`、`otools-ollama`、`otools-pakcap`、`otools-portkill`、
+`otools-scrcpy`、`otools-servrun`、`otools-sslgo`、`otools-starfish`、`otools-term`、`otools-tts`、
+`otools-vm`、`remotecrl`）；其余插件选到会在 **discover** 阶段明确失败并提示修复命令。
 
 ## 插件发布流程（`build-otools-plugin.yml`）
 
