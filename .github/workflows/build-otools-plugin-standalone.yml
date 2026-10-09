@@ -13,7 +13,7 @@ run-name: "build-otools-plugin-standalone • ${{ github.event.inputs.plugin_dir
 # 3. 所以这里每个 job 都必须 `make_latest: false`。
 #
 # 前置：插件目录里必须已有 `app/` 壳（`pnpm build:plugin-app -- plugins/<dir>` 生成）。
-# 目前只有 otools-git 铺开了，其余插件选到会在 discover 阶段明确失败并给出修复命令。
+# 目前 OTools 仓库里 23 个插件已铺开壳；未铺开的插件选到会在 discover 阶段明确失败并给出修复命令。
 
 on:
   workflow_dispatch:
