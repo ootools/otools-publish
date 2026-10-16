@@ -373,6 +373,21 @@ jobs:
           zip_path="artifacts/${{ needs.discover.outputs.packid }}-${{ needs.discover.outputs.version }}.oplg"
           python OTools/scripts/plugin_pack.py zip "OTools/plugins/${{ inputs.plugin_dir }}" "$zip_path"
 
+      # 分平台包（新模式）：只含本平台 native 库，下载体积更小；合包保留作兜底。
+      # plugin_pack.py 会在平台库缺失时直接报错，所以这里不会产出残包。
+      - name: Pack per-platform plugin zips
+        if: needs.discover.outputs.has_native == 'True' || needs.discover.outputs.has_native == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in windows linux macos; do
+            zip_path="artifacts/${{ needs.discover.outputs.packid }}-${{ needs.discover.outputs.version }}-${platform}.oplg"
+            python OTools/scripts/plugin_pack.py zip \
+              "OTools/plugins/${{ inputs.plugin_dir }}" "$zip_path" \
+              --native-platform "$platform"
+            echo "分平台包: $zip_path"
+          done
+
       - uses: actions/upload-artifact@v4
         with:
           name: plugin-pack-${{ needs.discover.outputs.packid }}
@@ -490,15 +505,26 @@ jobs:
 
       - name: Verify plugin package asset
         env:
+          HAS_NATIVE: ${{ needs.discover.outputs.has_native }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}/${{ needs.discover.outputs.packid }}-${{ needs.discover.outputs.version }}.oplg
         run: |
           set -euo pipefail
-          code="$(curl -sSL -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 3 "$PACKAGE_URL" || true)"
-          if [ "$code" != "200" ]; then
-            echo "插件包地址不可用($code): $PACKAGE_URL" >&2
-            exit 1
+          base_url="${PACKAGE_URL%.oplg}"
+          urls=("$PACKAGE_URL")
+          # 分平台包与合包同 Release 发布，一并校验可下载后再上报市场
+          if [ "$HAS_NATIVE" = "True" ] || [ "$HAS_NATIVE" = "true" ]; then
+            for platform in windows macos linux; do
+              urls+=("${base_url}-${platform}.oplg")
+            done
           fi
-          echo "插件包地址可用: $PACKAGE_URL"
+          for url in "${urls[@]}"; do
+            code="$(curl -sSL -o /dev/null -w '%{http_code}' --retry 5 --retry-delay 3 "$url" || true)"
+            if [ "$code" != "200" ]; then
+              echo "插件包地址不可用($code): $url" >&2
+              exit 1
+            fi
+            echo "插件包地址可用: $url"
+          done
 
       # 先把 logo 落到官网仓库并推送，让 logo 线上地址可用后再写入插件市场。
       - name: Sync plugin logo
@@ -535,11 +561,17 @@ jobs:
       - name: Submit plugin metadata to market
         env:
           OTOOLS_MARKET_TOKEN: ${{ secrets.OTOOLS_MARKET_TOKEN }}
+          HAS_NATIVE: ${{ needs.discover.outputs.has_native }}
         run: |
           set -euo pipefail
           if [ -z "$OTOOLS_MARKET_TOKEN" ]; then
             echo "Missing secret OTOOLS_MARKET_TOKEN" >&2
             exit 1
+          fi
+          # 新模式：有 native 的插件上报分平台包（packageMode=1），客户端优先按平台下载
+          platform_args=()
+          if [ "$HAS_NATIVE" = "True" ] || [ "$HAS_NATIVE" = "true" ]; then
+            platform_args=(--platform windows --platform macos --platform linux)
           fi
           python publish/scripts/sync-plugin-market.py \
             --plugin-dir "OTools/plugins/${{ inputs.plugin_dir }}" \
@@ -552,4 +584,5 @@ jobs:
             --api-url "${{ vars.OTOOLS_MARKET_API || 'https://otools-api.lingyun.net/api/v1/otools/plugin/publish' }}" \
             --website-base-url "${{ vars.OTOOLS_WEBSITE_BASE_URL || 'https://otools.lingyun.net' }}" \
             --skip-logo \
-            --token "$OTOOLS_MARKET_TOKEN"
+            --token "$OTOOLS_MARKET_TOKEN" \
+            "${platform_args[@]}"

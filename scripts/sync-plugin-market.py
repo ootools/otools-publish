@@ -69,6 +69,14 @@ def build_package_url(release_repo: str, release_tag: str, packid: str, version:
     return f"https://github.com/{release_repo}/releases/download/{release_tag}/{asset_name}"
 
 
+def build_platform_package_url(
+    release_repo: str, release_tag: str, packid: str, version: str, platform: str
+) -> str:
+    """分平台包地址：<packid>-<version>-<platform>.oplg（与合包同 Release）。"""
+    asset_name = f"{packid}-{version}-{platform}.oplg"
+    return f"https://github.com/{release_repo}/releases/download/{release_tag}/{asset_name}"
+
+
 def copy_logo(logo_path: Path, website_dir: Path, packid: str) -> tuple[Path, bool]:
     """把 logo 拷贝到官网仓库，返回 (目标路径, 是否有内容变化)。"""
     target_dir = website_dir / "public" / LOGO_DIR_NAME
@@ -108,6 +116,9 @@ def build_payload(
     package_url: str,
     official: bool,
     changelog: str = "",
+    platforms: list[str] | None = None,
+    release_repo: str = DEFAULT_RELEASE_REPO,
+    release_tag: str = "",
 ) -> dict:
     """构造提交给插件市场的插件元信息。
 
@@ -117,31 +128,40 @@ def build_payload(
     ``changelog`` 是该版本的更新说明（通常由 build-plugin-changelog.py 按插件目录
     过滤提交生成）。留空时不提交该字段 —— compact() 会剥掉空值，避免用空串
     覆盖后台人工维护的说明。
+
+    ``platforms`` 是本次发布提供了分平台包的平台列表（windows/macos/linux）。
+    非空时上报各平台包地址并置 packageMode=1（客户端优先下载平台包，
+    失败回退合包 packageUrl）；为空时不提交这些字段，保持 0=仅合包语义。
     """
-    return compact(
-        {
-            "packid": packid,
-            "uuid": str(manifest.get("uuid") or packid).strip(),
-            "displayName": str(manifest.get("displayName") or packid).strip(),
-            "displayNameCN": str(manifest.get("displayNameCN") or "").strip(),
-            "developerName": str(manifest.get("developerName") or "").strip(),
-            "summary": str(manifest.get("summary") or "").strip(),
-            "version": version,
-            "changelog": str(changelog or "").strip(),
-            "minOToolsVersion": str(
-                manifest.get("minOToolsVersion") or manifest.get("minOtoolsVersion") or ""
-            ).strip(),
-            "icon": str(manifest.get("icon") or "").strip(),
-            "logo": logo_url,
-            "entry": str(manifest.get("entry") or "").strip(),
-            "screenshots": manifest.get("screenshots") or [],
-            "packageUrl": package_url,
-            "official": official,
-            "supportMacos": True,
-            "supportWindows": True,
-            "supportLinux": True,
-        }
-    )
+    payload = {
+        "packid": packid,
+        "uuid": str(manifest.get("uuid") or packid).strip(),
+        "displayName": str(manifest.get("displayName") or packid).strip(),
+        "displayNameCN": str(manifest.get("displayNameCN") or "").strip(),
+        "developerName": str(manifest.get("developerName") or "").strip(),
+        "summary": str(manifest.get("summary") or "").strip(),
+        "version": version,
+        "changelog": str(changelog or "").strip(),
+        "minOToolsVersion": str(
+            manifest.get("minOToolsVersion") or manifest.get("minOtoolsVersion") or ""
+        ).strip(),
+        "icon": str(manifest.get("icon") or "").strip(),
+        "logo": logo_url,
+        "entry": str(manifest.get("entry") or "").strip(),
+        "screenshots": manifest.get("screenshots") or [],
+        "packageUrl": package_url,
+        "official": official,
+        "supportMacos": True,
+        "supportWindows": True,
+        "supportLinux": True,
+    }
+    for platform in platforms or []:
+        payload[f"packageUrl{platform.capitalize()}"] = build_platform_package_url(
+            release_repo, release_tag, packid, version, platform
+        )
+    if platforms:
+        payload["packageMode"] = 1
+    return compact(payload)
 
 
 def submit_payload(api_url: str, token: str, payload: dict, timeout: int) -> dict:
@@ -202,6 +222,13 @@ def parse_args() -> argparse.Namespace:
         help="该版本的更新说明（多行文本）；留空则不提交该字段，避免覆盖后台人工维护的内容",
     )
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help="插件市场发布接口地址")
+    parser.add_argument(
+        "--platform",
+        action="append",
+        choices=["windows", "macos", "linux"],
+        default=[],
+        help="本次发布提供了分平台包的平台；可重复传入。非空时上报 packageMode=1",
+    )
     parser.add_argument("--website-base-url", default=DEFAULT_WEBSITE_BASE_URL, help="官网站点根地址")
     parser.add_argument("--token", default="", help="插件市场发布令牌")
     parser.add_argument("--timeout", type=int, default=30, help="接口超时时间(秒)")
@@ -239,13 +266,31 @@ def main() -> None:
     official = not args.no_official
 
     payload = build_payload(
-        manifest, packid, version, logo_url, package_url, official, args.changelog
+        manifest,
+        packid,
+        version,
+        logo_url,
+        package_url,
+        official,
+        args.changelog,
+        platforms=list(args.platform),
+        release_repo=args.release_repo,
+        release_tag=release_tag,
     )
 
     print(f"[sync-plugin-market] 插件: {packid} v{version}")
     print(f"[sync-plugin-market] logo: {logo_path}")
     print(f"[sync-plugin-market] 包地址: {package_url}")
     print(f"[sync-plugin-market] logo 地址: {logo_url}")
+    if args.platform:
+        print(f"[sync-plugin-market] 分平台包: {', '.join(args.platform)} (packageMode=1)")
+        for platform in args.platform:
+            print(
+                f"[sync-plugin-market]   {platform}: "
+                f"{build_platform_package_url(args.release_repo, release_tag, packid, version, platform)}"
+            )
+    else:
+        print("[sync-plugin-market] 分平台包: 无 (packageMode=0，仅合包)")
 
     if args.dry_run:
         print("[sync-plugin-market] dry-run 模式，仅输出提交内容:")
