@@ -12,6 +12,14 @@ on:
         description: "显示在 Actions 列表里的版本号，例如 0.1.0"
         required: false
         default: "auto"
+      package_mode:
+        description: "分平台独立包模式（packageMode）：on=有 native 时打平台包并上报 1；off=仅合包并显式上报 0（回滚用）"
+        required: false
+        type: choice
+        default: "on"
+        options:
+          - "on"
+          - "off"
       plugin_dir:
         description: "选择要打包的插件目录"
         required: true
@@ -375,8 +383,11 @@ jobs:
 
       # 分平台包（新模式）：只含本平台 native 库，下载体积更小；合包保留作兜底。
       # plugin_pack.py 会在平台库缺失时直接报错，所以这里不会产出残包。
+      # package_mode=off（回滚）时不打平台包，仅发布合包。
       - name: Pack per-platform plugin zips
-        if: needs.discover.outputs.has_native == 'True' || needs.discover.outputs.has_native == 'true'
+        if: |
+          (needs.discover.outputs.has_native == 'True' || needs.discover.outputs.has_native == 'true') &&
+          inputs.package_mode != 'off'
         shell: bash
         run: |
           set -euo pipefail
@@ -506,13 +517,15 @@ jobs:
       - name: Verify plugin package asset
         env:
           HAS_NATIVE: ${{ needs.discover.outputs.has_native }}
+          PACKAGE_MODE: ${{ inputs.package_mode }}
           PACKAGE_URL: https://github.com/${{ github.repository }}/releases/download/plugin-${{ needs.discover.outputs.packid }}-v${{ needs.discover.outputs.version }}/${{ needs.discover.outputs.packid }}-${{ needs.discover.outputs.version }}.oplg
         run: |
           set -euo pipefail
           base_url="${PACKAGE_URL%.oplg}"
           urls=("$PACKAGE_URL")
-          # 分平台包与合包同 Release 发布，一并校验可下载后再上报市场
-          if [ "$HAS_NATIVE" = "True" ] || [ "$HAS_NATIVE" = "true" ]; then
+          # 分平台包与合包同 Release 发布，一并校验可下载后再上报市场；
+          # package_mode=off（仅合包）时不校验平台包
+          if { [ "$HAS_NATIVE" = "True" ] || [ "$HAS_NATIVE" = "true" ]; } && [ "$PACKAGE_MODE" != "off" ]; then
             for platform in windows macos linux; do
               urls+=("${base_url}-${platform}.oplg")
             done
@@ -562,16 +575,22 @@ jobs:
         env:
           OTOOLS_MARKET_TOKEN: ${{ secrets.OTOOLS_MARKET_TOKEN }}
           HAS_NATIVE: ${{ needs.discover.outputs.has_native }}
+          PACKAGE_MODE: ${{ inputs.package_mode }}
         run: |
           set -euo pipefail
           if [ -z "$OTOOLS_MARKET_TOKEN" ]; then
             echo "Missing secret OTOOLS_MARKET_TOKEN" >&2
             exit 1
           fi
-          # 新模式：有 native 的插件上报分平台包（packageMode=1），客户端优先按平台下载
+          # packageMode 由派发参数决定：
+          #   on  + 有 native → 上报分平台包地址与 packageMode=1（客户端优先按平台下载）
+          #   off             → 显式上报 packageMode=0（仅合包，回滚时清除残留的 1）
+          #   on  + 无 native → 不提交 packageMode（纯前端插件无平台包，走默认值 0）
           platform_args=()
-          if [ "$HAS_NATIVE" = "True" ] || [ "$HAS_NATIVE" = "true" ]; then
-            platform_args=(--platform windows --platform macos --platform linux)
+          if { [ "$HAS_NATIVE" = "True" ] || [ "$HAS_NATIVE" = "true" ]; } && [ "$PACKAGE_MODE" != "off" ]; then
+            platform_args+=(--platform windows --platform macos --platform linux)
+          elif [ "$PACKAGE_MODE" = "off" ]; then
+            platform_args+=(--package-mode 0)
           fi
           python publish/scripts/sync-plugin-market.py \
             --plugin-dir "OTools/plugins/${{ inputs.plugin_dir }}" \

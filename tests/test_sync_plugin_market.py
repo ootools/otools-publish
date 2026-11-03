@@ -218,6 +218,83 @@ class SyncPluginMarketTests(unittest.TestCase):
         self.assertIn("otools-git-0.1.0.oplg", output)
         self.assertFalse((website_dir / "public").exists(), "dry-run 不应写入官网仓库")
 
+    def test_main_dry_run_reports_package_mode_zero(self) -> None:
+        """--package-mode 0：payload 显式带 packageMode=0（回滚/仅合包发布）。"""
+        plugin_dir = make_plugin()
+        website_dir = Path(tempfile.mkdtemp())
+        argv = sys.argv
+        sys.argv = [
+            "sync-plugin-market.py",
+            "--plugin-dir",
+            str(plugin_dir),
+            "--website-dir",
+            str(website_dir),
+            "--release-tag",
+            "plugin-otools-git-v0.1.0",
+            "--package-mode",
+            "0",
+            "--dry-run",
+        ]
+        try:
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                module.main()
+        finally:
+            sys.argv = argv
+
+        self.assertIn('"packageMode": 0', stream.getvalue())
+
+    def test_main_dry_run_reports_platform_packages(self) -> None:
+        """--platform：payload 带平台包地址与 packageMode=1。"""
+        plugin_dir = make_plugin()
+        website_dir = Path(tempfile.mkdtemp())
+        argv = sys.argv
+        sys.argv = [
+            "sync-plugin-market.py",
+            "--plugin-dir",
+            str(plugin_dir),
+            "--website-dir",
+            str(website_dir),
+            "--release-tag",
+            "plugin-otools-dbm-v0.2.6",
+            "--platform",
+            "macos",
+            "--dry-run",
+        ]
+        try:
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                module.main()
+        finally:
+            sys.argv = argv
+
+        self.assertIn('"packageMode": 1', stream.getvalue())
+        # 包名按 plugin.json 的 packid/version 生成（测试插件为 otools-git 0.1.0）
+        self.assertIn("otools-git-0.1.0-macos.oplg", stream.getvalue())
+
+    def test_main_rejects_package_mode_one_without_platform(self) -> None:
+        """--package-mode 1 缺 --platform：参数矛盾，启动即失败。"""
+        plugin_dir = make_plugin()
+        website_dir = Path(tempfile.mkdtemp())
+        argv = sys.argv
+        sys.argv = [
+            "sync-plugin-market.py",
+            "--plugin-dir",
+            str(plugin_dir),
+            "--website-dir",
+            str(website_dir),
+            "--release-tag",
+            "plugin-otools-dbm-v0.2.6",
+            "--package-mode",
+            "1",
+            "--dry-run",
+        ]
+        try:
+            with self.assertRaises(SystemExit):
+                module.main()
+        finally:
+            sys.argv = argv
+
     def test_main_skip_submit_writes_logo_only(self) -> None:
         plugin_dir = make_plugin()
         website_dir = Path(tempfile.mkdtemp())

@@ -119,6 +119,7 @@ def build_payload(
     platforms: list[str] | None = None,
     release_repo: str = DEFAULT_RELEASE_REPO,
     release_tag: str = "",
+    package_mode: int | None = None,
 ) -> dict:
     """构造提交给插件市场的插件元信息。
 
@@ -132,7 +133,19 @@ def build_payload(
     ``platforms`` 是本次发布提供了分平台包的平台列表（windows/macos/linux）。
     非空时上报各平台包地址并置 packageMode=1（客户端优先下载平台包，
     失败回退合包 packageUrl）；为空时不提交这些字段，保持 0=仅合包语义。
+
+    ``package_mode`` 是 CI 显式指定的 packageMode（来自 workflow 派发参数），
+    优先于「按 --platform 推导」的行为：
+    - 1：分平台模式，必须同时传入 ``platforms``；
+    - 0：仅合包模式，必须不传 ``platforms``；显式写 0 用于从分平台模式
+      回退时清除库里残留的 packageMode=1（不写会被后端保留旧值）。
     """
+    platforms = list(platforms or [])
+    if package_mode == 1 and not platforms:
+        fail("--package-mode 1 需要至少传入一个 --platform（分平台模式必须提供平台包地址）")
+    if package_mode == 0 and platforms:
+        fail("--package-mode 0（仅合包）不能与 --platform 同时使用")
+
     payload = {
         "packid": packid,
         "uuid": str(manifest.get("uuid") or packid).strip(),
@@ -155,12 +168,14 @@ def build_payload(
         "supportWindows": True,
         "supportLinux": True,
     }
-    for platform in platforms or []:
+    for platform in platforms:
         payload[f"packageUrl{platform.capitalize()}"] = build_platform_package_url(
             release_repo, release_tag, packid, version, platform
         )
     if platforms:
         payload["packageMode"] = 1
+    elif package_mode == 0:
+        payload["packageMode"] = 0
     return compact(payload)
 
 
@@ -229,6 +244,16 @@ def parse_args() -> argparse.Namespace:
         default=[],
         help="本次发布提供了分平台包的平台；可重复传入。非空时上报 packageMode=1",
     )
+    parser.add_argument(
+        "--package-mode",
+        choices=["0", "1"],
+        default=None,
+        help=(
+            "显式指定上报的 packageMode（通常来自 CI 派发参数）："
+            "1=分平台模式（需配合 --platform）；0=仅合包模式，显式写 0 以清除"
+            "库里残留的 packageMode=1。缺省时按 --platform 是否传入推导"
+        ),
+    )
     parser.add_argument("--website-base-url", default=DEFAULT_WEBSITE_BASE_URL, help="官网站点根地址")
     parser.add_argument("--token", default="", help="插件市场发布令牌")
     parser.add_argument("--timeout", type=int, default=30, help="接口超时时间(秒)")
@@ -276,6 +301,7 @@ def main() -> None:
         platforms=list(args.platform),
         release_repo=args.release_repo,
         release_tag=release_tag,
+        package_mode=int(args.package_mode) if args.package_mode is not None else None,
     )
 
     print(f"[sync-plugin-market] 插件: {packid} v{version}")
@@ -289,6 +315,8 @@ def main() -> None:
                 f"[sync-plugin-market]   {platform}: "
                 f"{build_platform_package_url(args.release_repo, release_tag, packid, version, platform)}"
             )
+    elif args.package_mode == "0":
+        print("[sync-plugin-market] 分平台包: 无 (packageMode=0 显式上报，仅合包)")
     else:
         print("[sync-plugin-market] 分平台包: 无 (packageMode=0，仅合包)")
 
