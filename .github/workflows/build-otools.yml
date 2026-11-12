@@ -248,13 +248,20 @@ jobs:
             # 环境变量优先级高于 Cargo.toml，仓库配置一字不动；Linux 产物本就
             # strip="debuginfo"，关 debug 不改变最终二进制。macOS/Windows 保持
             # fat LTO + 完整优化。诊断脚本每 30 秒采样资源留痕。
+            #
+            # 三次重跑的诊断显示：构建开始约 19 分钟后 cgroup 稳定在 15 GiB、
+            # 额外换出 9-15 GiB swap、MemAvailable 仅 0.2 GiB、load≈1.7，之后
+            # 80 分钟曲线几乎不波动 —— 不是「慢」而是卡在换页。用 timeout 给
+            # 单平台诊断跑一个硬上限，让步骤以失败收尾（而不是整跑被取消），
+            # 这样 always() 的诊断上传和 rust-cache 的 post 保存都能执行，
+            # 下一轮可增量复用 target。定位到真正吃内存的阶段后即可调大/去掉。
             export CARGO_PROFILE_RELEASE_LTO=off
             export CARGO_PROFILE_RELEASE_DEBUG=0
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
-              -- pnpm tauri:build
+              -- timeout -k 30 60m pnpm tauri:build
           else
             pnpm tauri:build
           fi

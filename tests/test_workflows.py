@@ -126,7 +126,10 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         steps = split_steps(text)
         build = next(step for step in steps if "name: Build the App (Linux/MacOS)" in step)
         self.assertIn("ci-build-diagnostics.py", build)
-        self.assertIn("-- pnpm tauri:build", build)
+        self.assertIn("pnpm tauri:build", build)
+        # Linux 换页卡死时必须以「步骤失败」收尾：整跑被取消不会执行 post 步骤，
+        # diagnostics artifact 与 rust-cache 都可能丢失。
+        self.assertIn("timeout -k 30 60m pnpm tauri:build", build)
         upload = next((step for step in steps if "name: Upload Linux build diagnostics" in step), "")
         self.assertIn("always()", upload)
         self.assertIn("matrix.platform == 'ubuntu-24.04'", upload)
