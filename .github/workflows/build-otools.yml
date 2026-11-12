@@ -106,11 +106,18 @@ jobs:
       - name: Cache Rust dependencies and target
         uses: Swatinem/rust-cache@v2
         with:
+          # rust-cache 的 `-> target` 是相对 workspace 根解析的，不是相对仓库根：
+          # 原来写 `OTools/src-tauri -> OTools/target` 实际指向
+          # `OTools/src-tauri/OTools/target`（不存在），缓存里只有 cargo registry，
+          # 编译产物从未入库，Linux 每次发布都是 30 分钟以上的全量冷编译。
           workspaces: |
-            OTools/src-tauri -> OTools/target
+            OTools/src-tauri -> ../target
           key: ${{ matrix.platform }}-release
-          # Linux release 全量重编要 30 分钟以上；构建失败/被回收时也要存下
-          # 已编译产物，否则每次重跑都从头编译，更容易再次撞上 runner 回收。
+          # 只给 Linux 缓存 release 依赖产物：4 个平台各存一份 GB 级 target
+          # 会挤爆仓库 10 GiB 的 Actions 缓存配额，其它平台只缓存 registry 即可。
+          cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') }}
+          # 构建步骤正常失败时也要存下已编译产物。注意 runner 被 OOM 强制回收
+          # 会取消整个 job，post 步骤不会执行，那种情况只能靠不 OOM 来解。
           cache-on-failure: true
 
       - name: Install dependencies (Linux)
@@ -210,6 +217,20 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      - name: Add Linux build swap (fat-LTO link can exceed 16 GiB RAM)
+        if: matrix.platform == 'ubuntu-24.04'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          # runner 自带 3 GiB swap 不够：release 的 fat-LTO 链接 cgroup 峰值
+          # 到 15-16 GiB，实测 memory.events 出现 oom_kill=1 后 runner 被强制回收。
+          sudo fallocate -l 12G /mnt/swapfile-extra
+          sudo chmod 600 /mnt/swapfile-extra
+          sudo mkswap /mnt/swapfile-extra
+          sudo swapon /mnt/swapfile-extra
+          swapon --show
+          free -h
+
       - name: Build the App (Linux/MacOS)
         if: matrix.platform != 'windows-2022'
         working-directory: OTools
@@ -217,9 +238,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == 'ubuntu-24.04' ]]; then
-            # 0.9.0 的 Linux release 在主 crate codegen 阶段长时间无输出后
-            # runner 收到 shutdown signal。每 30 秒采样内存 / cgroup oom_kill /
-            # 磁盘，日志与 artifact 双留痕，用于区分 OOM、磁盘耗尽与 runner 回收。
+            # 0.9.0 的 Linux release 在 fat-LTO 链接阶段内存打满 16 GiB 后
+            # runner 被强制回收。每 30 秒采样内存 / cgroup oom_kill / 磁盘，
+            # 日志与 artifact 双留痕，便于复核 OOM 是否已被额外 swap 消掉。
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \

@@ -138,6 +138,33 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         cache = next(step for step in steps if "Swatinem/rust-cache@v2" in step)
         self.assertIn("cache-on-failure: true", cache)
 
+    def test_rust_cache_points_at_the_real_target_dir(self):
+        """`-> target` 相对 workspace 根解析；写错会静默只缓存 cargo registry。
+
+        0.9.0 实测：`OTools/src-tauri -> OTools/target` 指向不存在的
+        `OTools/src-tauri/OTools/target`，缓存只有 ~280 MB，编译产物从未入库，
+        导致每次 Linux 发布都是 30 分钟以上的全量冷编译。
+        """
+        steps = split_steps(self.workflow())
+        cache = next(step for step in steps if "Swatinem/rust-cache@v2" in step)
+        self.assertIn("\n            OTools/src-tauri -> ../target\n", cache)
+        self.assertNotIn("\n            OTools/src-tauri -> OTools/target\n", cache)
+        self.assertIn("cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') }}", cache)
+
+    def test_linux_build_has_extra_swap_before_lto_link(self):
+        """fat-LTO 链接峰值 15-16 GiB 会触发 oom_kill；必须先补足 swap。"""
+        steps = split_steps(self.workflow())
+        swap_idx = next(
+            i for i, step in enumerate(steps) if "name: Add Linux build swap" in step
+        )
+        build_idx = next(
+            i for i, step in enumerate(steps) if "name: Build the App (Linux/MacOS)" in step
+        )
+        self.assertLess(swap_idx, build_idx)
+        swap = steps[swap_idx]
+        self.assertIn("matrix.platform == 'ubuntu-24.04'", swap)
+        self.assertIn("swapon /mnt/swapfile-extra", swap)
+
 
 class PluginAppLatestJsonScriptTests(unittest.TestCase):
     """清单脚本必须与工作流里写死的 tag 约定一致。"""
