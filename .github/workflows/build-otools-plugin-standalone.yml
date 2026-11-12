@@ -246,9 +246,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          # APP 壳是根 workspace 成员，target 目录在仓库根
+          # APP 壳是根 workspace 成员，target 目录在仓库根（OTools/target）。
+          # `-> target` 相对 workspace 根解析；写 `OTools/target` 会拼成
+          # `OTools/OTools/target`（不存在），缓存里只剩 cargo registry。
           workspaces: |
-            OTools -> OTools/target
+            OTools -> target
           key: plugin-app-${{ inputs.plugin_dir }}-${{ matrix.os }}
 
       - name: Install dependencies (Linux)

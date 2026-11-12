@@ -247,8 +247,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          # rust-cache 的 `-> target` 相对 workspace 根解析（path.join(root, target)）。
+          # 本线 cargo build 显式 --target-dir "OTools/<adapter>/native/target"，
+          # 所以这里只写 `target`；写全路径会拼成双重前缀、缓存到不存在的目录。
           workspaces: |
-            OTools/${{ needs.discover.outputs.adapter_root }}/native -> OTools/${{ needs.discover.outputs.adapter_root }}/native/target
+            OTools/${{ needs.discover.outputs.adapter_root }}/native -> target
           key: plugin-${{ inputs.plugin_dir }}-${{ matrix.artifact_name }}
 
       - name: Install dependencies (Linux)

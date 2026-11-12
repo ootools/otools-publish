@@ -166,6 +166,40 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         self.assertIn("swapon /mnt/swapfile-extra", swap)
 
 
+class PluginRustCacheTargetDirTests(unittest.TestCase):
+    """插件线 rust-cache 的 target 必须相对 workspace 根，不能写全路径。
+
+    rust-cache 源码里是 `path.join(root, target)`：写
+    `OTools/<adapter>/native -> OTools/<adapter>/native/target` 会解析成
+    `OTools/<adapter>/native/OTools/<adapter>/native/target`（不存在），
+    缓存静默退化成只有 cargo registry，插件每次发布都全量重编。
+    """
+
+    def test_plugin_workflows_use_relative_target_dir(self):
+        for name in ("build-otools-plugin.yml", "build-otools-plugin-standalone.yml"):
+            path = WORKFLOW_DIR / name
+            steps = split_steps(path.read_text(encoding="utf-8"))
+            cache = next(step for step in steps if "Swatinem/rust-cache@v2" in step)
+            mapping = [
+                line.strip()
+                for line in cache.splitlines()
+                if "->" in line and not line.lstrip().startswith("#")
+            ]
+            self.assertEqual(len(mapping), 1, f"{name} 的 workspaces 映射不唯一")
+            self.assertTrue(
+                mapping[0].endswith("-> target"),
+                f"{name} 的 target 写成全路径会被拼成双重前缀:\n{mapping[0]}",
+            )
+
+    def test_plugin_native_build_really_puts_target_inside_workspace(self):
+        """`-> target` 成立的前提：cargo 确实把产物放在 workspace 内的 target/。"""
+        text = (WORKFLOW_DIR / "build-otools-plugin.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            '--target-dir "OTools/${{ needs.discover.outputs.adapter_root }}/native/target"',
+            text,
+        )
+
+
 class PluginAppLatestJsonScriptTests(unittest.TestCase):
     """清单脚本必须与工作流里写死的 tag 约定一致。"""
 
