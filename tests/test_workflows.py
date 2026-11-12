@@ -165,29 +165,38 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         self.assertIn("matrix.platform == 'ubuntu-24.04'", swap)
         self.assertIn("swapon /mnt/swapfile-extra", swap)
 
-    def test_linux_uses_thin_lto_without_changing_other_platforms(self):
-        """fat-LTO 链接吃满 16 GiB 被 OOM 杀；只加 swap 会换页到 2h+ 仍不结束。
+    def test_linux_disables_lto_without_changing_other_platforms(self):
+        """0.9.0 Linux 的 fat / thin LTO 工作集都超过 16 GB RAM + 16 GB swap。
 
-        CARGO_PROFILE_RELEASE_LTO 是 Cargo 官方支持、优先级高于 Cargo.toml 的
-        环境变量，所以只在 CI Linux 分支 export thin，仓库里的 lto=true /
-        debug=1 / codegen-units=1 一个字不动；macOS/Windows 仍走 fat LTO。
+        实测：fat-LTO 在 25 分钟触发 oom_kill；加 swap 后换页 2.5 小时不结束；
+        thin LTO 与 codegen-units=1 组合仍是单个巨型 codegen unit，工作集 32 GB。
+        所以 CI Linux 关 LTO / 关 debug / 拆 codegen units（三者都是 Cargo 官方
+        环境变量，优先级高于 Cargo.toml，仓库配置一字不动）；Linux 产物本就
+        strip="debuginfo"，关 debug 不改变最终二进制。macOS/Windows 必须保持
+        fat LTO + 完整优化，因此这些 export 只能出现在 Linux 分支里。
         """
         steps = split_steps(self.workflow())
         build = next(step for step in steps if "name: Build the App (Linux/MacOS)" in step)
-        self.assertNotIn(
-            "CARGO_PROFILE_RELEASE_LTO:",
-            build,
-            "不能写进 step 级 env，否则 macOS/Windows 也会变成 thin LTO",
-        )
+        for var in ("LTO", "DEBUG", "CODEGEN_UNITS"):
+            self.assertNotIn(
+                f"CARGO_PROFILE_RELEASE_{var}:",
+                build,
+                "不能写进 step 级 env，否则 macOS/Windows 也会被降级",
+            )
         cut = build.index("\n          else\n")
         linux_branch, other_platforms = build[:cut], build[cut:]
-        self.assertIn("export CARGO_PROFILE_RELEASE_LTO=thin", linux_branch)
-        self.assertLess(
-            linux_branch.index("export CARGO_PROFILE_RELEASE_LTO=thin"),
-            linux_branch.index("ci-build-diagnostics.py"),
-            "env 必须在启动构建（诊断脚本）之前 export",
-        )
-        self.assertNotIn("CARGO_PROFILE_RELEASE_LTO", other_platforms)
+        for setting in (
+            "export CARGO_PROFILE_RELEASE_LTO=off",
+            "export CARGO_PROFILE_RELEASE_DEBUG=0",
+            "export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16",
+        ):
+            self.assertIn(setting, linux_branch)
+            self.assertLess(
+                linux_branch.index(setting),
+                linux_branch.index("ci-build-diagnostics.py"),
+                "env 必须在启动构建（诊断脚本）之前 export",
+            )
+        self.assertNotIn("CARGO_PROFILE_RELEASE", other_platforms)
         self.assertIn("pnpm tauri:build", other_platforms)
 
 

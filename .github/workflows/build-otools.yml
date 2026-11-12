@@ -217,7 +217,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: Add Linux build swap (fat-LTO link can exceed 16 GiB RAM)
+      - name: Add Linux build swap (safety net for release link)
         if: matrix.platform == 'ubuntu-24.04'
         shell: bash
         run: |
@@ -240,13 +240,17 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == 'ubuntu-24.04' ]]; then
-            # 0.9.0 的 Linux release 在 fat-LTO 链接阶段 cgroup 峰值打到
-            # 15-16 GiB，触发 oom_kill 后 runner 被强制回收；只加 swap 虽不
-            # 再被杀，但 LTO 随机换页让链接拖到 2 小时以上仍不结束。
-            # 仅 CI Linux 用 thin LTO 压低链接峰值内存：Cargo 的环境变量
-            # 覆盖 Cargo.toml 的 lto=true，debug=1 / codegen-units=1 不变，
-            # macOS/Windows 仍走 fat LTO。诊断脚本每 30 秒采样资源留痕。
-            export CARGO_PROFILE_RELEASE_LTO=thin
+            # 0.9.0 Linux release 的 fat-LTO 链接峰值 16 GB 触发 oom_kill；
+            # 加 12G swap 只是不被杀，单线程 LTO 换页 2.5 小时仍不结束；
+            # 改 thin LTO 实测工作集仍达 32 GB（RAM + swap 全满），因为它与
+            # codegen-units=1 组合下仍是单个巨型 codegen unit，分模块并行失效。
+            # 故 CI Linux 彻底关 LTO、拆开 codegen units、关调试信息：Cargo 的
+            # 环境变量优先级高于 Cargo.toml，仓库配置一字不动；Linux 产物本就
+            # strip="debuginfo"，关 debug 不改变最终二进制。macOS/Windows 保持
+            # fat LTO + 完整优化。诊断脚本每 30 秒采样资源留痕。
+            export CARGO_PROFILE_RELEASE_LTO=off
+            export CARGO_PROFILE_RELEASE_DEBUG=0
+            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
