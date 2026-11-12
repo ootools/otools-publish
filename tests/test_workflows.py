@@ -109,6 +109,36 @@ class HostWorkflowMakeLatestTests(unittest.TestCase):
             )
 
 
+class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
+    def workflow(self):
+        return (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+
+    def test_linux_only_run_cannot_publish_an_incomplete_updater_manifest(self):
+        text = self.workflow()
+        job = text.split("\n  publish-updater-manifest:", 1)[1]
+        header = job.split("\n    steps:", 1)[0]
+        self.assertIn("github.event.inputs.build_platform != 'linux'", header)
+        self.assertIn("build_platform:", text)
+        self.assertIn("fromJSON(github.event.inputs.build_platform == 'linux'", text)
+
+    def test_linux_build_runs_diagnostics_before_uploading_its_artifacts(self):
+        text = self.workflow()
+        steps = split_steps(text)
+        build = next(step for step in steps if "name: Build the App (Linux/MacOS)" in step)
+        self.assertIn("ci-build-diagnostics.py", build)
+        self.assertIn("-- pnpm tauri:build", build)
+        upload = next((step for step in steps if "name: Upload Linux build diagnostics" in step), "")
+        self.assertIn("always()", upload)
+        self.assertIn("matrix.platform == 'ubuntu-24.04'", upload)
+        self.assertIn("otools-build-diagnostics", upload)
+
+    def test_failed_build_still_warms_the_rust_cache(self):
+        """Linux release 全量编译 30 分钟以上；失败不存缓存会陷入每次从头重编的死循环。"""
+        steps = split_steps(self.workflow())
+        cache = next(step for step in steps if "Swatinem/rust-cache@v2" in step)
+        self.assertIn("cache-on-failure: true", cache)
+
+
 class PluginAppLatestJsonScriptTests(unittest.TestCase):
     """清单脚本必须与工作流里写死的 tag 约定一致。"""
 

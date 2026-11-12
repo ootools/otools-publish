@@ -12,6 +12,14 @@ on:
         description: "显示在 Actions 列表里的版本号，例如 0.6.2"
         required: false
         default: "auto"
+      build_platform:
+        description: "all=四平台正式发布；linux=只重跑 Linux 打包（诊断用，不会发布合并后的 latest.json）"
+        required: false
+        type: choice
+        default: "all"
+        options:
+          - all
+          - linux
 
 jobs:
   resolve_version:
@@ -50,7 +58,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-2022, macos-latest, macos-15-intel, ubuntu-24.04]
+        # linux-only 只起一个 job，便于单独复现 Ubuntu 打包问题；
+        # 该模式下 publish-updater-manifest 会被跳过，避免只含 linux 的清单覆盖全平台 Latest。
+        platform: ${{ fromJSON(github.event.inputs.build_platform == 'linux' && '["ubuntu-24.04"]' || '["windows-2022","macos-latest","macos-15-intel","ubuntu-24.04"]') }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -99,6 +109,9 @@ jobs:
           workspaces: |
             OTools/src-tauri -> OTools/target
           key: ${{ matrix.platform }}-release
+          # Linux release 全量重编要 30 分钟以上；构建失败/被回收时也要存下
+          # 已编译产物，否则每次重跑都从头编译，更容易再次撞上 runner 回收。
+          cache-on-failure: true
 
       - name: Install dependencies (Linux)
         if: matrix.platform == 'ubuntu-24.04'
@@ -200,11 +213,33 @@ jobs:
       - name: Build the App (Linux/MacOS)
         if: matrix.platform != 'windows-2022'
         working-directory: OTools
-        run: pnpm tauri:build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.platform }}" == 'ubuntu-24.04' ]]; then
+            # 0.9.0 的 Linux release 在主 crate codegen 阶段长时间无输出后
+            # runner 收到 shutdown signal。每 30 秒采样内存 / cgroup oom_kill /
+            # 磁盘，日志与 artifact 双留痕，用于区分 OOM、磁盘耗尽与 runner 回收。
+            python3 scripts/ci-build-diagnostics.py \
+              --output-dir build-diagnostics \
+              --interval 30 \
+              -- pnpm tauri:build
+          else
+            pnpm tauri:build
+          fi
         env:
           RUST_BACKTRACE: full
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Upload Linux build diagnostics
+        if: always() && matrix.platform == 'ubuntu-24.04'
+        uses: actions/upload-artifact@v4
+        with:
+          name: otools-build-diagnostics-${{ needs.resolve_version.outputs.version }}-${{ github.run_id }}
+          path: OTools/build-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Stage macOS release assets by architecture
         if: startsWith(matrix.platform, 'macos-')
@@ -418,6 +453,9 @@ jobs:
           if-no-files-found: error
 
   publish-updater-manifest:
+    # linux-only 是诊断重跑：此时只有 linux-x86_64 一个平台的清单片段，
+    # 合并上传会把正式 latest.json 覆盖成单平台，导致其它客户端检查更新失效。
+    if: github.event.inputs.build_platform != 'linux'
     needs:
       - resolve_version
       - publish-tauri
