@@ -259,6 +259,9 @@ jobs:
             # timeout 让卡死以「步骤失败」收尾（整跑被取消不会执行 post 步骤），
             # 这样 always() 的诊断上传和 rust-cache 的 cache-on-failure 保存
             # 都能执行，下一轮可增量复用 target。
+            # 60m → 120m：拆出 ot-platform-core 后实测 `Finished release profile
+            # in 59m 05s`，紧接着才开始 AppImage 打包，60m 上限只差 43 秒就把
+            # 已编译好的产物打掉（exit 124）。上限必须覆盖编译 + 打包全流程。
             export CARGO_PROFILE_RELEASE_OPT_LEVEL=2
             export CARGO_PROFILE_RELEASE_LTO=off
             export CARGO_PROFILE_RELEASE_DEBUG=0
@@ -267,7 +270,7 @@ jobs:
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
-              -- timeout -k 30 60m pnpm tauri:build
+              -- timeout -k 30 120m pnpm tauri:build
           else
             pnpm tauri:build
           fi
