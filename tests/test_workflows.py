@@ -169,14 +169,14 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         self.assertIn("swapon /mnt/swapfile-extra", swap)
 
     def test_linux_disables_lto_without_changing_other_platforms(self):
-        """0.9.0 Linux 的 fat / thin LTO 工作集都超过 16 GB RAM + 16 GB swap。
+        """Linux 用 Cargo 官方环境变量降内存，macOS/Windows 必须保持原配置。
 
-        实测：fat-LTO 在 25 分钟触发 oom_kill；加 swap 后换页 2.5 小时不结束；
-        thin LTO 与 codegen-units=1 组合仍是单个巨型 codegen unit，工作集 32 GB。
-        所以 CI Linux 关 LTO / 关 debug / 拆 codegen units（三者都是 Cargo 官方
-        环境变量，优先级高于 Cargo.toml，仓库配置一字不动）；Linux 产物本就
-        strip="debuginfo"，关 debug 不改变最终二进制。macOS/Windows 必须保持
-        fat LTO + 完整优化，因此这些 export 只能出现在 Linux 分支里。
+        增强诊断（run 43186906179）确认：主 crate `src-tauri` 的单个 rustc
+        进程 RSS 14.9 GiB、anon 占 98%、file cache 35 MB、pgscan 9.9e7，
+        是 LLVM codegen 换页死锁。把 codegen-units 从 1 改成 16 是内存放大器，
+        故 CI Linux 明确恢复 codegen-units=1，并关 LTO / 关 debug、
+        单 rustc 作业。Cargo 环境变量优先级高于 Cargo.toml，仓库配置一字不动；
+        Linux 产物本就 strip="debuginfo"，关 debug 不改变最终二进制。
         """
         steps = split_steps(self.workflow())
         build = next(step for step in steps if "name: Build the App (Linux/MacOS)" in step)
@@ -191,7 +191,8 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         for setting in (
             "export CARGO_PROFILE_RELEASE_LTO=off",
             "export CARGO_PROFILE_RELEASE_DEBUG=0",
-            "export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16",
+            "export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1",
+            "export CARGO_BUILD_JOBS=1",
         ):
             self.assertIn(setting, linux_branch)
             self.assertLess(

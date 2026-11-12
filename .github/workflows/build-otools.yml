@@ -240,24 +240,27 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == 'ubuntu-24.04' ]]; then
-            # 0.9.0 Linux release 的 fat-LTO 链接峰值 16 GB 触发 oom_kill；
-            # 加 12G swap 只是不被杀，单线程 LTO 换页 2.5 小时仍不结束；
-            # 改 thin LTO 实测工作集仍达 32 GB（RAM + swap 全满），因为它与
-            # codegen-units=1 组合下仍是单个巨型 codegen unit，分模块并行失效。
-            # 故 CI Linux 彻底关 LTO、拆开 codegen units、关调试信息：Cargo 的
-            # 环境变量优先级高于 Cargo.toml，仓库配置一字不动；Linux 产物本就
-            # strip="debuginfo"，关 debug 不改变最终二进制。macOS/Windows 保持
-            # fat LTO + 完整优化。诊断脚本每 30 秒采样资源留痕。
+            # 0.9.0 Linux 定位结论（run 43186906179，增强诊断首跑）：
+            # 依赖 crate 在约 10 分钟内全部编完，之后主 crate `src-tauri` 的
+            # 单个 rustc 进程 RSS 峰值 14.9 GiB，anon 占 cgroup current 98%、
+            # file cache 只剩 35 MB、pgscan 累计 9.9e7 —— 是 LLVM codegen
+            # 真的吃满内存并陷入换页死锁，不是链接阶段、也不是页缓存假象；
+            # 连续 50 分钟没有任何编译输出，最后被 60 分钟 timeout 掐断。
+            # 根因是 CI 把 codegen-units 从 Cargo.toml 的 1 改成了 16：
+            # opt-level=3 下 16 个 LLVM module 并行优化，内存成倍放大。
+            # 恢复 codegen-units=1（11-08 成功构建用的就是 1，当时还开
+            # fat LTO + debug=1，比现在更重），保留 Linux 专有的
+            # LTO=off / debug=0，并让 CARGO_BUILD_JOBS=1 避免双 rustc 叠加峰值。
+            # Cargo 环境变量优先级高于 Cargo.toml，仓库配置一字不动；
+            # macOS/Windows 保持 fat LTO + 完整优化。
             #
-            # 三次重跑的诊断显示：构建开始约 19 分钟后 cgroup 稳定在 15 GiB、
-            # 额外换出 9-15 GiB swap、MemAvailable 仅 0.2 GiB、load≈1.7，之后
-            # 80 分钟曲线几乎不波动 —— 不是「慢」而是卡在换页。用 timeout 给
-            # 单平台诊断跑一个硬上限，让步骤以失败收尾（而不是整跑被取消），
-            # 这样 always() 的诊断上传和 rust-cache 的 post 保存都能执行，
-            # 下一轮可增量复用 target。定位到真正吃内存的阶段后即可调大/去掉。
+            # timeout 让卡死以「步骤失败」收尾（整跑被取消不会执行 post 步骤），
+            # 这样 always() 的诊断上传和 rust-cache 的 cache-on-failure 保存
+            # 都能执行，下一轮可增量复用 target。
             export CARGO_PROFILE_RELEASE_LTO=off
             export CARGO_PROFILE_RELEASE_DEBUG=0
-            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
+            export CARGO_BUILD_JOBS=1
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
