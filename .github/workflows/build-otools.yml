@@ -50,7 +50,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest, macos-15-intel, ubuntu-latest]
+        platform: [windows-2022, macos-latest, macos-15-intel, ubuntu-24.04]
 
     runs-on: ${{ matrix.platform }}
 
@@ -101,7 +101,7 @@ jobs:
           key: ${{ matrix.platform }}-release
 
       - name: Install dependencies (Linux)
-        if: matrix.platform == 'ubuntu-latest'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           WEBKIT_DEV_PKG="libwebkit2gtk-4.1-dev"
@@ -125,7 +125,7 @@ jobs:
           brew install unixodbc
 
       - name: Install dependencies (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-2022'
         run: choco install sqlserver-odbcdriver -y --no-progress
 
       - name: Install dependencies (Frontend)
@@ -133,7 +133,7 @@ jobs:
         run: pnpm install --no-frozen-lockfile
 
       - name: Build the App (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-2022'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -160,7 +160,7 @@ jobs:
       # 自用排查时从本次运行的 Actions 页下载 artifact 即可。
       # 暂存目录刻意放在 release-assets/ 之外，避免被下面的 assets glob 误捞。
       - name: Stage Debug Symbols (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-2022'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -189,7 +189,7 @@ jobs:
           }
 
       - name: Upload Debug Symbols artifact (Windows)
-        if: matrix.platform == 'windows-latest'
+        if: matrix.platform == 'windows-2022'
         uses: actions/upload-artifact@v4
         with:
           name: otools-debug-symbols-${{ needs.resolve_version.outputs.version }}
@@ -198,7 +198,7 @@ jobs:
           retention-days: 90
 
       - name: Build the App (Linux/MacOS)
-        if: matrix.platform != 'windows-latest'
+        if: matrix.platform != 'windows-2022'
         working-directory: OTools
         run: pnpm tauri:build
         env:
@@ -237,7 +237,7 @@ jobs:
           test -s "OTools/release-assets/$platform/OTools_${version}_${platform#darwin-}.app.tar.gz.sig"
 
       - name: Upload Release Assets (Linux)
-        if: matrix.platform == 'ubuntu-latest'
+        if: matrix.platform == 'ubuntu-24.04'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.resolve_version.outputs.version }}
@@ -293,8 +293,8 @@ jobs:
           os_key_map = {
             "macos-latest": "darwin",
             "macos-15-intel": "darwin",
-            "ubuntu-latest": "linux",
-            "windows-latest": "windows",
+            "ubuntu-24.04": "linux",
+            "windows-2022": "windows",
           }
           os_key = os_key_map.get(matrix_platform, "linux")
 
