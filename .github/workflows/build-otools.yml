@@ -222,8 +222,10 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          # runner 自带 3 GiB swap 不够：release 的 fat-LTO 链接 cgroup 峰值
+          # runner 自带 3 GiB swap 不够：历史 fat-LTO 链接 cgroup 峰值
           # 到 15-16 GiB，实测 memory.events 出现 oom_kill=1 后 runner 被强制回收。
+          # Linux 已改用 thin LTO 压低峰值，这里保留额外 swap 只是兜底，
+          # 避免偶发峰值再次触发 OOM 回收（thin LTO 下基本不会用到）。
           sudo fallocate -l 12G /mnt/swapfile-extra
           sudo chmod 600 /mnt/swapfile-extra
           sudo mkswap /mnt/swapfile-extra
@@ -238,9 +240,13 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == 'ubuntu-24.04' ]]; then
-            # 0.9.0 的 Linux release 在 fat-LTO 链接阶段内存打满 16 GiB 后
-            # runner 被强制回收。每 30 秒采样内存 / cgroup oom_kill / 磁盘，
-            # 日志与 artifact 双留痕，便于复核 OOM 是否已被额外 swap 消掉。
+            # 0.9.0 的 Linux release 在 fat-LTO 链接阶段 cgroup 峰值打到
+            # 15-16 GiB，触发 oom_kill 后 runner 被强制回收；只加 swap 虽不
+            # 再被杀，但 LTO 随机换页让链接拖到 2 小时以上仍不结束。
+            # 仅 CI Linux 用 thin LTO 压低链接峰值内存：Cargo 的环境变量
+            # 覆盖 Cargo.toml 的 lto=true，debug=1 / codegen-units=1 不变，
+            # macOS/Windows 仍走 fat LTO。诊断脚本每 30 秒采样资源留痕。
+            export CARGO_PROFILE_RELEASE_LTO=thin
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \

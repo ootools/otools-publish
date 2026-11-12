@@ -165,6 +165,31 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         self.assertIn("matrix.platform == 'ubuntu-24.04'", swap)
         self.assertIn("swapon /mnt/swapfile-extra", swap)
 
+    def test_linux_uses_thin_lto_without_changing_other_platforms(self):
+        """fat-LTO 链接吃满 16 GiB 被 OOM 杀；只加 swap 会换页到 2h+ 仍不结束。
+
+        CARGO_PROFILE_RELEASE_LTO 是 Cargo 官方支持、优先级高于 Cargo.toml 的
+        环境变量，所以只在 CI Linux 分支 export thin，仓库里的 lto=true /
+        debug=1 / codegen-units=1 一个字不动；macOS/Windows 仍走 fat LTO。
+        """
+        steps = split_steps(self.workflow())
+        build = next(step for step in steps if "name: Build the App (Linux/MacOS)" in step)
+        self.assertNotIn(
+            "CARGO_PROFILE_RELEASE_LTO:",
+            build,
+            "不能写进 step 级 env，否则 macOS/Windows 也会变成 thin LTO",
+        )
+        cut = build.index("\n          else\n")
+        linux_branch, other_platforms = build[:cut], build[cut:]
+        self.assertIn("export CARGO_PROFILE_RELEASE_LTO=thin", linux_branch)
+        self.assertLess(
+            linux_branch.index("export CARGO_PROFILE_RELEASE_LTO=thin"),
+            linux_branch.index("ci-build-diagnostics.py"),
+            "env 必须在启动构建（诊断脚本）之前 export",
+        )
+        self.assertNotIn("CARGO_PROFILE_RELEASE_LTO", other_platforms)
+        self.assertIn("pnpm tauri:build", other_platforms)
+
 
 class PluginRustCacheTargetDirTests(unittest.TestCase):
     """插件线 rust-cache 的 target 必须相对 workspace 根，不能写全路径。
