@@ -240,23 +240,26 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${{ matrix.platform }}" == 'ubuntu-24.04' ]]; then
-            # 0.9.0 Linux 定位结论（run 43186906179，增强诊断首跑）：
-            # 依赖 crate 在约 10 分钟内全部编完，之后主 crate `src-tauri` 的
-            # 单个 rustc 进程 RSS 峰值 14.9 GiB，anon 占 cgroup current 98%、
-            # file cache 只剩 35 MB、pgscan 累计 9.9e7 —— 是 LLVM codegen
-            # 真的吃满内存并陷入换页死锁，不是链接阶段、也不是页缓存假象；
-            # 连续 50 分钟没有任何编译输出，最后被 60 分钟 timeout 掐断。
-            # 根因是 CI 把 codegen-units 从 Cargo.toml 的 1 改成了 16：
-            # opt-level=3 下 16 个 LLVM module 并行优化，内存成倍放大。
-            # 恢复 codegen-units=1（11-08 成功构建用的就是 1，当时还开
-            # fat LTO + debug=1，比现在更重），保留 Linux 专有的
-            # LTO=off / debug=0，并让 CARGO_BUILD_JOBS=1 避免双 rustc 叠加峰值。
+            # 0.9.0 Linux 排查结论（截至 run 43196929061）：
+            # - 依赖 crate 约 18 分钟编完，之后主 crate `src-tauri` 的单个
+            #   rustc 反复出现 ~14.7 GiB 匿名页峰值（10:24:44、10:38:48 两次），
+            #   随后 swap 吃到 14.4 GiB、MemAvailable 0.2 GiB、pgscan 7.5e7，
+            #   进入换页死锁，60 分钟 timeout 掐断（exit 124）。
+            # - codegen-units 从 1 改 16、再改回 1，峰值都不变 ⇒ 不是 CGU 拆分问题。
+            # - 本地 `cargo check -p OTools`（expansion + typeck，不含 MIR/LLVM）
+            #   峰值不足 1 GiB ⇒ 前端不是元凶，14.7 GiB 全在 MIR 优化 + LLVM codegen。
+            # - 仓库规模：`src-tauri/src` 自 11-08 成功构建（43,287 行）涨到
+            #   65,766 行（+52%），其中 platform/ 56,318 行。16 GiB runner 装不下。
+            #
+            # 因此 Linux 分支把 opt-level 从 3 降到 2：MIR 内联与 LLVM 优化都降一档，
+            # 直接压 codegen 峰值；配合 LTO=off、debug=0、单 rustc 作业。
             # Cargo 环境变量优先级高于 Cargo.toml，仓库配置一字不动；
-            # macOS/Windows 保持 fat LTO + 完整优化。
+            # macOS/Windows 保持 fat LTO + opt-level=3 完整优化。
             #
             # timeout 让卡死以「步骤失败」收尾（整跑被取消不会执行 post 步骤），
             # 这样 always() 的诊断上传和 rust-cache 的 cache-on-failure 保存
             # 都能执行，下一轮可增量复用 target。
+            export CARGO_PROFILE_RELEASE_OPT_LEVEL=2
             export CARGO_PROFILE_RELEASE_LTO=off
             export CARGO_PROFILE_RELEASE_DEBUG=0
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1

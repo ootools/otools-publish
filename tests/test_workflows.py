@@ -171,16 +171,17 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
     def test_linux_disables_lto_without_changing_other_platforms(self):
         """Linux 用 Cargo 官方环境变量降内存，macOS/Windows 必须保持原配置。
 
-        增强诊断（run 43186906179）确认：主 crate `src-tauri` 的单个 rustc
-        进程 RSS 14.9 GiB、anon 占 98%、file cache 35 MB、pgscan 9.9e7，
-        是 LLVM codegen 换页死锁。把 codegen-units 从 1 改成 16 是内存放大器，
-        故 CI Linux 明确恢复 codegen-units=1，并关 LTO / 关 debug、
-        单 rustc 作业。Cargo 环境变量优先级高于 Cargo.toml，仓库配置一字不动；
-        Linux 产物本就 strip="debuginfo"，关 debug 不改变最终二进制。
+        实测（run 43196929061，cgu=1 复跑）：主 crate `src-tauri` 的单个 rustc
+        仍有两次 ~14.7 GiB 匿名页峰值，随后 swap 14.4 GiB、pgscan 7.5e7 换页死锁。
+        codegen-units 16/1 峰值相同，说明不是 CGU 拆分问题；本地 `cargo check`
+        （expansion + typeck）不足 1 GiB，说明 14.7 GiB 全在 MIR 优化 + LLVM codegen。
+        故 Linux 分支额外把 opt-level 降到 2，配合 LTO=off / debug=0 / 单 rustc 作业。
+        Cargo 环境变量优先级高于 Cargo.toml，仓库配置一字不动；Linux 产物本就
+        strip="debuginfo"，关 debug 不改变最终二进制。
         """
         steps = split_steps(self.workflow())
         build = next(step for step in steps if "name: Build the App (Linux/MacOS)" in step)
-        for var in ("LTO", "DEBUG", "CODEGEN_UNITS"):
+        for var in ("LTO", "DEBUG", "CODEGEN_UNITS", "OPT_LEVEL"):
             self.assertNotIn(
                 f"CARGO_PROFILE_RELEASE_{var}:",
                 build,
@@ -189,6 +190,7 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         cut = build.index("\n          else\n")
         linux_branch, other_platforms = build[:cut], build[cut:]
         for setting in (
+            "export CARGO_PROFILE_RELEASE_OPT_LEVEL=2",
             "export CARGO_PROFILE_RELEASE_LTO=off",
             "export CARGO_PROFILE_RELEASE_DEBUG=0",
             "export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1",
