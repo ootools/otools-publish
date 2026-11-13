@@ -13,13 +13,14 @@ on:
         required: false
         default: "auto"
       build_platform:
-        description: "all=四平台正式发布；linux=只重跑 Linux 打包（诊断用，不会发布合并后的 latest.json）"
+        description: "all=四平台正式发布；linux/windows=单平台诊断补跑（不会覆盖合并后的 latest.json）"
         required: false
         type: choice
         default: "all"
         options:
           - all
           - linux
+          - windows
 
 jobs:
   resolve_version:
@@ -60,7 +61,7 @@ jobs:
       matrix:
         # linux-only 只起一个 job，便于单独复现 Ubuntu 打包问题；
         # 该模式下 publish-updater-manifest 会被跳过，避免只含 linux 的清单覆盖全平台 Latest。
-        platform: ${{ fromJSON(github.event.inputs.build_platform == 'linux' && '["ubuntu-24.04"]' || '["windows-2022","macos-latest","macos-15-intel","ubuntu-24.04"]') }}
+        platform: ${{ fromJSON(github.event.inputs.build_platform == 'linux' && '["ubuntu-24.04"]' || github.event.inputs.build_platform == 'windows' && '["windows-2022"]' || '["windows-2022","macos-latest","macos-15-intel","ubuntu-24.04"]') }}
 
     runs-on: ${{ matrix.platform }}
 
@@ -156,6 +157,12 @@ jobs:
         if: matrix.platform == 'windows-2022'
         uses: tauri-apps/tauri-action@v0
         env:
+          # Avoid the Windows runner OOM observed during host LLVM codegen.
+          # Preserve debug=1/PDB generation; scope memory overrides to Windows only.
+          CARGO_PROFILE_RELEASE_OPT_LEVEL: 2
+          CARGO_PROFILE_RELEASE_LTO: "off"
+          CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16
+          CARGO_BUILD_JOBS: 1
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUST_BACKTRACE: full
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -502,7 +509,7 @@ jobs:
   publish-updater-manifest:
     # linux-only 是诊断重跑：此时只有 linux-x86_64 一个平台的清单片段，
     # 合并上传会把正式 latest.json 覆盖成单平台，导致其它客户端检查更新失效。
-    if: github.event.inputs.build_platform != 'linux'
+    if: github.event.inputs.build_platform != 'linux' && github.event.inputs.build_platform != 'windows'
     needs:
       - resolve_version
       - publish-tauri

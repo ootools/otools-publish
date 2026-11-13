@@ -12,6 +12,18 @@ OTools 宿主与插件的发布仓库，只存放 GitHub Actions 工作流与发
 
 > `.oplg` 插件包与独立 APP 是**两条独立的发布线**，tag 与更新端点都分开，互不影响。
 
+## 宿主发布与单平台补跑
+
+`build-otools.yml` 的 `otools_ref` 可传源码发布标签，例如 `v0.9.1`；
+`display_version` 仅用于 Actions 标题，实际版本读取源码 Tauri 配置。
+`build_platform=all` 构建 Windows、macOS arm64/x64、Linux 并合并更新清单。
+`linux` 或 `windows` 仅补跑指定平台并上传该平台产物/清单片段，**不会覆盖完整 `latest.json`**。
+跨运行合并必须确认同版本四个平台及签名齐全后再公开 Release。
+
+Windows 宿主构建在该步骤内使用 `opt-level=2`、`LTO=off`、16 个 codegen units
+和单 Cargo 作业，降低 LLVM 内存峰值；保留 `debug=1` 的 PDB 诊断符号，
+不影响其它平台或插件发布工作流。
+
 ## 插件独立 APP 发布流程（`build-otools-plugin-standalone.yml`）
 
 把某个插件打成可独立安装运行的桌面应用（与宿主同源，但只带该插件的功能）。

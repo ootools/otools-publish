@@ -109,6 +109,27 @@ class HostWorkflowMakeLatestTests(unittest.TestCase):
             )
 
 
+class HostWindowsMemoryWorkflowTests(unittest.TestCase):
+    def test_windows_codegen_is_memory_bounded_and_keeps_symbols(self):
+        text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+        build = next(step for step in split_steps(text) if "name: Build the App (Windows)" in step)
+        for setting in (
+            "CARGO_PROFILE_RELEASE_OPT_LEVEL: 2",
+            'CARGO_PROFILE_RELEASE_LTO: "off"',
+            "CARGO_PROFILE_RELEASE_CODEGEN_UNITS: 16",
+            "CARGO_BUILD_JOBS: 1",
+        ):
+            self.assertIn(setting, build)
+        self.assertNotIn("CARGO_PROFILE_RELEASE_DEBUG: 0", build)
+
+    def test_windows_only_recovery_does_not_replace_complete_manifest(self):
+        text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+        self.assertIn("          - windows", text)
+        self.assertIn("github.event.inputs.build_platform == 'windows'", text)
+        manifest = text.split("\n  publish-updater-manifest:", 1)[1].split("\n    steps:", 1)[0]
+        self.assertIn("github.event.inputs.build_platform != 'windows'", manifest)
+
+
 class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
     def workflow(self):
         return (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
