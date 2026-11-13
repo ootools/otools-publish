@@ -109,6 +109,23 @@ class HostWorkflowMakeLatestTests(unittest.TestCase):
             )
 
 
+class HostIntelRecoveryWorkflowTests(unittest.TestCase):
+    def test_intel_recovery_is_memory_bounded_and_never_replaces_full_manifest(self):
+        text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+        self.assertIn("          - macos-intel", text)
+        self.assertIn("github.event.inputs.build_platform == 'macos-intel'", text)
+        header = text.split("\n  publish-updater-manifest:", 1)[1].split("\n    steps:", 1)[0]
+        self.assertIn("github.event.inputs.build_platform != 'macos-intel'", header)
+        intel = text.split('elif [[ "${{ matrix.platform }}" == \'macos-15-intel\' ]]; then', 1)[1].split("\n          else\n", 1)[0]
+        for setting in (
+            "export CARGO_PROFILE_RELEASE_OPT_LEVEL=2",
+            "export CARGO_PROFILE_RELEASE_LTO=off",
+            "export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16",
+            "export CARGO_BUILD_JOBS=1",
+        ):
+            self.assertIn(setting, intel)
+
+
 class HostWindowsMemoryWorkflowTests(unittest.TestCase):
     def test_windows_codegen_is_memory_bounded_and_keeps_symbols(self):
         text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
