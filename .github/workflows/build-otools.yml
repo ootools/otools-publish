@@ -277,7 +277,7 @@ jobs:
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
-              -- timeout -k 30 120m pnpm tauri:build
+              -- timeout -k 30 180m pnpm tauri:build
           else
             pnpm tauri:build
           fi

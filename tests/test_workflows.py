@@ -150,9 +150,9 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         self.assertIn("pnpm tauri:build", build)
         # Linux 换页卡死时必须以「步骤失败」收尾：整跑被取消不会执行 post 步骤，
         # diagnostics artifact 与 rust-cache 都可能丢失。
-        # 上限须覆盖「编译 + 打包」：实测编译 59m 05s，60m 会在 AppImage 打包途中
-        # 打掉已完成产物（exit 124），故放宽到 120m。
-        self.assertIn("timeout -k 30 120m pnpm tauri:build", build)
+        # The timeout covers compilation plus bundling: v0.9.1 compiled for
+        # 118m 32s and the previous 120m limit killed AppImage packaging.
+        self.assertIn("timeout -k 30 180m pnpm tauri:build", build)
         upload = next((step for step in steps if "name: Upload Linux build diagnostics" in step), "")
         self.assertIn("always()", upload)
         self.assertIn("matrix.platform == 'ubuntu-24.04'", upload)
