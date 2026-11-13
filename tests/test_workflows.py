@@ -122,6 +122,7 @@ class HostIntelRecoveryWorkflowTests(unittest.TestCase):
             "export CARGO_PROFILE_RELEASE_LTO=off",
             "export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16",
             "export CARGO_BUILD_JOBS=1",
+            "pnpm tauri:build --verbose -- --config profile.release.package.OTools.opt-level=1",
         ):
             self.assertIn(setting, intel)
 

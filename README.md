@@ -22,7 +22,7 @@ OTools 宿主与插件的发布仓库，只存放 GitHub Actions 工作流与发
 
 Windows 宿主构建在该步骤内使用 `opt-level=2`、`LTO=off`、16 个 codegen units
 和单 Cargo 作业，降低 LLVM 内存峰值；保留 `debug=1` 的 PDB 诊断符号，
-不影响其它平台或插件发布工作流。macOS Intel 对持续代码生成/链接停滞采用同类构建参数，Apple Silicon 维持原配置。
+不影响其它平台或插件发布工作流。macOS Intel 对持续代码生成/链接停滞采用同类构建参数，并仅把 OTools 宿主 crate 的优化等级降为 1（依赖维持 2）；Apple Silicon 维持原配置。
 
 ## 插件独立 APP 发布流程（`build-otools-plugin-standalone.yml`）
 

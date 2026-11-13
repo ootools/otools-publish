@@ -286,7 +286,9 @@ jobs:
             export CARGO_PROFILE_RELEASE_LTO=off
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
             export CARGO_BUILD_JOBS=1
-            pnpm tauri:build
+            # Dependencies retain opt-level=2; limit the giant host crate's
+            # optimization pass and expose exact Cargo/rustc phase flags.
+            pnpm tauri:build --verbose -- --config profile.release.package.OTools.opt-level=1
           else
             pnpm tauri:build
           fi
