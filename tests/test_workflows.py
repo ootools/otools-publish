@@ -14,8 +14,14 @@
   否则 `/releases/latest/download/latest.json` 这个更新端点会失效。
 """
 
+import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
+from textwrap import dedent
 from pathlib import Path
 
 WORKFLOW_DIR = Path(__file__).resolve().parents[1] / ".github" / "workflows"
@@ -171,7 +177,7 @@ class HostMacosX64CrossWorkflowTests(unittest.TestCase):
     def test_cross_isolated_from_release_assets_and_latest(self):
         text = self.workflow()
         upload = next(step for step in split_steps(text) if "name: Upload Release Assets (macOS)" in step)
-        self.assertIn("matrix.platform != 'macos-x64-cross'", upload)
+        self.assertIn("github.event.inputs.build_platform != 'macos-x64-cross'", upload)
         artifact = next(step for step in split_steps(text) if "name: Upload macOS x64 cross candidate" in step)
         self.assertIn("actions/upload-artifact@v4", artifact)
         self.assertIn("OTools/release-assets/darwin-x86_64/", artifact)
@@ -191,7 +197,181 @@ class HostMacosX64CrossWorkflowTests(unittest.TestCase):
         self.assertIn('output["candidate_only"] = True', manifest)
         self.assertIn('candidate-macos-x64-cross.json', manifest)
         platform_upload = next(step for step in split_steps(text) if "name: Upload platform latest.json" in step)
-        self.assertIn("matrix.platform != 'macos-x64-cross'", platform_upload)
+        self.assertIn("github.event.inputs.build_platform != 'macos-x64-cross'", platform_upload)
+
+
+
+class HostFormalMacosX64ReleaseTests(unittest.TestCase):
+    def workflow(self):
+        return (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+
+    def step(self, name):
+        return next(step for step in split_steps(self.workflow()) if "name: " + name + "\n" in step)
+
+    def expression(self, text, build_platform, matrix_platform=""):
+        # Evaluate only the equalities/booleans used in these workflow fields.
+        source = """
+const vm = require('node:vm');
+let expression = process.argv[1].replace(/^\$\{\{\s*/, '').replace(/\s*\}\}$/, '');
+let result = vm.runInNewContext(expression, {
+  github: {event: {inputs: {build_platform: process.argv[2]}}},
+  matrix: {platform: process.argv[3]}, fromJSON: JSON.parse,
+  startsWith: (value, prefix) => value.startsWith(prefix), always: () => true
+}, {timeout: 1000});
+console.log(JSON.stringify(result));
+"""
+        output = subprocess.check_output(["node", "-e", source, text, build_platform, matrix_platform], text=True)
+        return json.loads(output)
+
+    def enabled(self, name, build_platform, matrix_platform="macos-x64-cross"):
+        condition = re.search(r"^        if: (.+)$", self.step(name), re.M).group(1)
+        return self.expression(condition, build_platform, matrix_platform)
+
+    def manifest(self, root, build_platform):
+        script = self.step("Generate platform latest.json").split("python - <<'PY'\n", 1)[1].rsplit("          PY", 1)[0]
+        script = dedent(script).replace("${{ needs.resolve_version.outputs.version }}", "0.7.4").replace("${{ github.repository }}", "ootools/otools-publish").replace("${{ matrix.platform }}", "macos-x64-cross").replace("${{ github.event.inputs.build_platform }}", build_platform)
+        bundle = root / "release-assets/darwin-x86_64"
+        bundle.mkdir(parents=True)
+        (bundle / "OTools_0.7.4_x86_64.app.tar.gz").write_text("updater payload")
+        (bundle / "OTools_0.7.4_x86_64.app.tar.gz.sig").write_text("updater signature")
+        subprocess.run([sys.executable, "-c", "import platform\nplatform.machine = lambda: 'arm64'\n" + script], cwd=root, check=True, capture_output=True, text=True)
+        paths = list((root / "updater-manifest").glob("*.json"))
+        self.assertEqual(len(paths), 1)
+        return paths[0], json.loads(paths[0].read_text())
+
+    def test_default_dispatch_builds_intel_on_arm_and_preserves_native_fallback(self):
+        text = self.workflow()
+        matrix = re.search(r"^        platform: (.+)$", text, re.M).group(1)
+        runner = re.search(r"^    runs-on: (\$\{\{.+)$", text, re.M).group(1)
+        target = re.search(r"^          targets: (.+)$", self.step("Install Rust stable"), re.M).group(1)
+        for input_value in ("all", ""):
+            with self.subTest(input_value=input_value):
+                self.assertEqual(self.expression(matrix, input_value), ["windows-2022", "macos-latest", "macos-x64-cross", "ubuntu-24.04"])
+                self.assertEqual(self.expression(runner, input_value, "macos-x64-cross"), "macos-latest")
+                self.assertEqual(self.expression(target, input_value, "macos-x64-cross"), "x86_64-apple-darwin")
+        self.assertEqual(self.expression(matrix, "macos-intel"), ["macos-15-intel"])
+        self.assertEqual(self.expression(runner, "macos-intel", "macos-15-intel"), "macos-15-intel")
+        self.assertEqual(self.expression(matrix, "macos-x64-cross"), ["macos-x64-cross"])
+
+    def test_formal_and_candidate_dispatch_use_different_publication_gates(self):
+        merge_header = self.workflow().split("\n  publish-updater-manifest:", 1)[1].split("\n    steps:", 1)[0]
+        merge_condition = re.search(r"^    if: (.+)$", merge_header, re.M).group(1)
+        for input_value in ("all", ""):
+            with self.subTest(input_value=input_value):
+                self.assertTrue(self.enabled("Upload Release Assets (macOS)", input_value))
+                self.assertTrue(self.enabled("Upload platform latest.json", input_value))
+                self.assertFalse(self.enabled("Upload macOS x64 cross candidate", input_value))
+                self.assertTrue(self.expression(merge_condition, input_value))
+        for name in ("Upload Release Assets (macOS)", "Upload Release Assets (Linux)", "Upload platform latest.json", "Build the App (Windows)"):
+            self.assertFalse(self.enabled(name, "macos-x64-cross"), name)
+        self.assertTrue(self.enabled("Upload macOS x64 cross candidate", "macos-x64-cross"))
+        self.assertFalse(self.expression(merge_condition, "macos-x64-cross"))
+
+    def test_x64_cross_does_not_install_host_arm_homebrew_dependencies(self):
+        for input_value in ("all", "", "macos-x64-cross"):
+            self.assertFalse(self.enabled("Install dependencies (macOS)", input_value))
+        self.assertTrue(self.enabled("Install dependencies (macOS)", "all", "macos-latest"))
+        self.assertTrue(self.enabled("Install dependencies (macOS)", "macos-intel", "macos-15-intel"))
+
+    def test_cross_build_command_keeps_proven_flags_and_allows_cold_formal_compile(self):
+        step = self.step("Build the App (Linux/MacOS)")
+        script = dedent(step.split("        run: |\n", 1)[1].split("        env:\n", 1)[0])
+        for input_value, timeout in (("all", "10800"), ("", "10800"), ("macos-x64-cross", "5400")):
+            with self.subTest(input_value=input_value), tempfile.TemporaryDirectory(prefix="otools-cross-command-") as temp:
+                root = Path(temp)
+                stub = root / "bin/python3"
+                stub.parent.mkdir()
+                stub.write_text("#!/usr/bin/env python\nimport json, os, sys\njson.dump({'args': sys.argv[1:], 'env': {key: os.environ.get(key) for key in ['CARGO_PROFILE_RELEASE_OPT_LEVEL','CARGO_PROFILE_RELEASE_LTO','CARGO_PROFILE_RELEASE_CODEGEN_UNITS','CARGO_BUILD_JOBS','OPENSSL_NO_VENDOR','CC_x86_64_apple_darwin','CXX_x86_64_apple_darwin']}}, open('command.json','w'))\n")
+                # Use this test interpreter, not any command from the user's PATH.
+                stub.write_text(stub.read_text().replace("#!/usr/bin/env python", "#!" + sys.executable))
+                stub.chmod(0o755)
+                rendered = script.replace("${{ matrix.platform }}", "macos-x64-cross").replace("${{ github.event.inputs.build_platform }}", input_value)
+                subprocess.run(["bash", "-c", rendered], cwd=root, env={**os.environ, "PATH": str(stub.parent) + os.pathsep + os.environ["PATH"]}, check=True, capture_output=True, text=True)
+                command = json.loads((root / "command.json").read_text())
+                self.assertEqual(command["args"], ["scripts/ci-build-diagnostics.py", "--output-dir", "build-diagnostics", "--interval", "30", "--timeout", timeout, "--", "pnpm", "tauri:build", "--target", "x86_64-apple-darwin", "--verbose", "--", "--timings", "--verbose", "--config", "profile.release.package.OTools.opt-level=1"])
+                self.assertEqual(command["env"], {"CARGO_PROFILE_RELEASE_OPT_LEVEL":"2", "CARGO_PROFILE_RELEASE_LTO":"off", "CARGO_PROFILE_RELEASE_CODEGEN_UNITS":"16", "CARGO_BUILD_JOBS":"1", "OPENSSL_NO_VENDOR":"0", "CC_x86_64_apple_darwin":"clang", "CXX_x86_64_apple_darwin":"clang++"})
+
+    def test_formal_intel_manifest_has_release_urls_even_on_an_arm_runner(self):
+        for input_value in ("all", ""):
+            with self.subTest(input_value=input_value), tempfile.TemporaryDirectory(prefix="otools-formal-intel-") as temp:
+                path, data = self.manifest(Path(temp), input_value)
+                self.assertEqual(path.name, "latest-macos-x64-cross.json")
+                self.assertNotIn("candidate_only", data)
+                entry = {"signature": "updater signature", "url": "https://github.com/ootools/otools-publish/releases/download/v0.7.4/OTools_0.7.4_x86_64.app.tar.gz"}
+                self.assertEqual(data["platforms"], {"darwin-x86_64":entry,"darwin-x86_64-app":entry})
+
+    def test_explicit_candidate_manifest_has_no_release_url_or_arm_platform(self):
+        with tempfile.TemporaryDirectory(prefix="otools-candidate-intel-") as temp:
+            path, data = self.manifest(Path(temp), "macos-x64-cross")
+            self.assertEqual(path.name, "candidate-macos-x64-cross.json")
+            self.assertTrue(data["candidate_only"])
+            entry = {"signature":"updater signature", "file":"OTools_0.7.4_x86_64.app.tar.gz"}
+            self.assertEqual(data["platforms"], {"darwin-x86_64":entry,"darwin-x86_64-app":entry})
+
+
+
+class HostCompleteFormalManifestTests(unittest.TestCase):
+    workflow = HostFormalMacosX64ReleaseTests.workflow
+    step = HostFormalMacosX64ReleaseTests.step
+    manifest = HostFormalMacosX64ReleaseTests.manifest
+    def merge(self, root, remote=None):
+        script = self.step("Merge updater latest.json").split("python - <<'PY'\n", 1)[1].rsplit("          PY", 1)[0]
+        script = dedent(script).replace("${{ needs.resolve_version.outputs.version }}", "0.7.4").replace("${{ github.repository }}", "ootools/otools-publish")
+        stub = "import io, json, urllib.request, urllib.error\nremote = json.loads(" + repr(json.dumps(remote)) + ")\ndef fake_urlopen(url):\n    if remote is None:\n        raise urllib.error.URLError('no remote fixture')\n    return io.BytesIO(json.dumps(remote).encode('utf-8'))\nurllib.request.urlopen = fake_urlopen\n"
+        return subprocess.run([sys.executable, "-c", stub + script], cwd=root, capture_output=True, text=True)
+
+    def fragments(self, root, include_intel=False):
+        destination = root / "updater-manifests"
+        destination.mkdir()
+        items = {
+            "windows-x86_64":{"url":"https://github.com/ootools/otools-publish/releases/download/v0.7.4/windows.exe", "signature":"windows signature"},
+            "darwin-aarch64":{"url":"https://github.com/ootools/otools-publish/releases/download/v0.7.4/arm.app.tar.gz", "signature":"arm signature"},
+            "linux-x86_64":{"url":"https://github.com/ootools/otools-publish/releases/download/v0.7.4/linux.AppImage", "signature":"linux signature"},
+        }
+        for key, entry in items.items():
+            (destination / ("latest-" + key + ".json")).write_text(json.dumps({"version":"0.7.4", "notes":"Release notes", "platforms":{key:entry}}))
+        if include_intel:
+            path, data = self.manifest(root, "all")
+            (destination / path.name).write_text(json.dumps(data))
+
+    def test_merge_includes_generated_formal_cross_intel_and_all_other_targets(self):
+        with tempfile.TemporaryDirectory(prefix="otools-four-platform-") as temp:
+            root = Path(temp)
+            self.fragments(root, True)
+            result = self.merge(root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads((root / "latest.json").read_text())
+            self.assertEqual(data["version"], "0.7.4")
+            self.assertEqual(list(data["platforms"]), ["darwin-aarch64", "darwin-x86_64", "darwin-x86_64-app", "linux-x86_64", "windows-x86_64"])
+            self.assertEqual(data["platforms"]["darwin-x86_64"], {"url":"https://github.com/ootools/otools-publish/releases/download/v0.7.4/OTools_0.7.4_x86_64.app.tar.gz", "signature":"updater signature"})
+
+    def test_missing_intel_fails_before_latest_write_even_with_candidate_metadata(self):
+        with tempfile.TemporaryDirectory(prefix="otools-missing-intel-") as temp:
+            root = Path(temp)
+            self.fragments(root)
+            (root / "updater-manifests/candidate-macos-x64-cross.json").write_text(json.dumps({"version":"0.7.4", "candidate_only":True, "platforms":{"darwin-x86_64":{"file":"intel.app.tar.gz", "signature":"candidate signature"}}}))
+            result = self.merge(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("darwin-x86_64", result.stderr)
+            self.assertFalse((root / "latest.json").exists())
+
+    def test_old_remote_manifest_cannot_supply_missing_intel(self):
+        with tempfile.TemporaryDirectory(prefix="otools-remote-version-") as temp:
+            root = Path(temp)
+            self.fragments(root)
+            result = self.merge(root, {"version":"0.7.3", "platforms":{"darwin-x86_64":{"url":"https://github.com/ootools/otools-publish/releases/download/v0.7.3/intel.app.tar.gz", "signature":"old signature"}}})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("darwin-x86_64", result.stderr)
+            self.assertFalse((root / "latest.json").exists())
+
+    def test_same_version_remote_manifest_may_supply_missing_target(self):
+        with tempfile.TemporaryDirectory(prefix="otools-remote-same-version-") as temp:
+            root = Path(temp)
+            self.fragments(root)
+            result = self.merge(root, {"version":"0.7.4", "platforms":{"darwin-x86_64":{"url":"https://github.com/ootools/otools-publish/releases/download/v0.7.4/intel.app.tar.gz", "signature":"verified Intel signature"}}})
+            self.assertEqual(result.returncode, 0, result.stderr)
+            data = json.loads((root / "latest.json").read_text())
+            self.assertEqual(data["platforms"]["darwin-x86_64"], {"url":"https://github.com/ootools/otools-publish/releases/download/v0.7.4/intel.app.tar.gz", "signature":"verified Intel signature"})
 
 
 class HostWindowsMemoryWorkflowTests(unittest.TestCase):

@@ -13,7 +13,7 @@ on:
         required: false
         default: "auto"
       build_platform:
-        description: "all=四平台正式发布；linux/windows/macos-intel=单平台补跑；macos-x64-cross=ARM 编译 x64 对照（仅 Actions 制品）"
+        description: "all=四平台正式发布（Intel 使用 ARM 交叉编译）；macos-intel=原生 Intel 回退；linux/windows=单平台补跑；macos-x64-cross=仅 Actions 候选包"
         required: false
         type: choice
         default: "all"
@@ -61,9 +61,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # linux-only 只起一个 job，便于单独复现 Ubuntu 打包问题；
-        # 该模式下 publish-updater-manifest 会被跳过，避免只含 linux 的清单覆盖全平台 Latest。
-        platform: ${{ fromJSON(github.event.inputs.build_platform == 'linux' && '["ubuntu-24.04"]' || github.event.inputs.build_platform == 'windows' && '["windows-2022"]' || github.event.inputs.build_platform == 'macos-intel' && '["macos-15-intel"]' || github.event.inputs.build_platform == 'macos-x64-cross' && '["macos-x64-cross"]' || '["windows-2022","macos-latest","macos-15-intel","ubuntu-24.04"]') }}
+        # Default Intel releases use the verified ARM-host x64 route.
+        # Native Intel remains opt-in recovery; single-platform runs never merge latest.
+        platform: ${{ fromJSON(github.event.inputs.build_platform == 'linux' && '["ubuntu-24.04"]' || github.event.inputs.build_platform == 'windows' && '["windows-2022"]' || github.event.inputs.build_platform == 'macos-intel' && '["macos-15-intel"]' || github.event.inputs.build_platform == 'macos-x64-cross' && '["macos-x64-cross"]' || '["windows-2022","macos-latest","macos-x64-cross","ubuntu-24.04"]') }}
 
     runs-on: ${{ matrix.platform == 'macos-x64-cross' && 'macos-latest' || matrix.platform }}
 
@@ -317,7 +317,11 @@ jobs:
               --timeout 5400 \
               -- pnpm tauri:build --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           elif [[ "${{ matrix.platform }}" == 'macos-x64-cross' ]]; then
-            # Same optimization baseline as native Intel, different host architecture.
+            # Preserve the measured cross flags/cache; formal runs also need cold-cache headroom.
+            cross_timeout=10800
+            if [[ "${{ github.event.inputs.build_platform }}" == 'macos-x64-cross' ]]; then
+              cross_timeout=5400
+            fi
             export CARGO_PROFILE_RELEASE_OPT_LEVEL=2
             export CARGO_PROFILE_RELEASE_LTO=off
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -328,7 +332,7 @@ jobs:
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
-              --timeout 5400 \
+              --timeout "$cross_timeout" \
               -- pnpm tauri:build --target x86_64-apple-darwin --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           else
             pnpm tauri:build
@@ -445,7 +449,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release Assets (macOS)
-        if: startsWith(matrix.platform, 'macos-') && matrix.platform != 'macos-x64-cross'
+        if: startsWith(matrix.platform, 'macos-') && github.event.inputs.build_platform != 'macos-x64-cross'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.resolve_version.outputs.version }}
@@ -570,7 +574,7 @@ jobs:
           candidates.sort(key=lambda item: bundle_order.get(item["bundle"], 999))
 
           platforms = {}
-          candidate_only = matrix_platform == "macos-x64-cross"
+          candidate_only = matrix_platform == "macos-x64-cross" and "${{ github.event.inputs.build_platform }}" == "macos-x64-cross"
           for idx, item in enumerate(candidates):
             entry = (
               {"signature": item["signature"], "file": item["basename"]}
@@ -605,7 +609,7 @@ jobs:
           PY
 
       - name: Upload macOS x64 cross candidate
-        if: matrix.platform == 'macos-x64-cross'
+        if: matrix.platform == 'macos-x64-cross' && github.event.inputs.build_platform == 'macos-x64-cross'
         uses: actions/upload-artifact@v4
         with:
           name: otools-macos-x64-cross-candidate-${{ needs.resolve_version.outputs.version }}-${{ github.run_id }}
@@ -616,7 +620,7 @@ jobs:
           retention-days: 14
 
       - name: Upload platform latest.json
-        if: matrix.platform != 'macos-x64-cross'
+        if: github.event.inputs.build_platform != 'macos-x64-cross'
         uses: actions/upload-artifact@v4
         with:
           name: latest-json-${{ matrix.platform }}
@@ -707,6 +711,11 @@ jobs:
           except Exception:
             remote_data = None
 
+          if isinstance(remote_data, dict):
+            remote_version = str(remote_data.get("version", "")).strip().lstrip("v")
+            if remote_version != expected_version:
+              remote_data = None
+
           if not manifests and not isinstance(remote_data, dict):
             raise SystemExit(
               "No valid updater latest.json artifacts found from platform jobs, and no remote latest.json found for this tag."
@@ -736,8 +745,10 @@ jobs:
             if merged_pub_date is None and remote_data.get("pub_date"):
               merged_pub_date = str(remote_data["pub_date"])
 
-          if not merged_platforms:
-            raise SystemExit("Merged updater manifest has no valid platforms.")
+          required_platforms = {"windows-x86_64", "darwin-aarch64", "darwin-x86_64", "linux-x86_64"}
+          missing_platforms = required_platforms - merged_platforms.keys()
+          if missing_platforms:
+            raise SystemExit("Merged updater manifest is missing required platforms: " + ", ".join(sorted(missing_platforms)))
 
           changelog_path = "changelog.txt"
           host_changelog = ""
