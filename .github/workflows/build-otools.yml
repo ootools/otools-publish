@@ -13,7 +13,7 @@ on:
         required: false
         default: "auto"
       build_platform:
-        description: "all=四平台正式发布；linux/windows/macos-intel=单平台诊断补跑（不会覆盖合并后的 latest.json）"
+        description: "all=四平台正式发布；linux/windows/macos-intel=单平台补跑；macos-x64-cross=ARM 编译 x64 对照（仅 Actions 制品）"
         required: false
         type: choice
         default: "all"
@@ -22,6 +22,7 @@ on:
           - linux
           - windows
           - macos-intel
+          - macos-x64-cross
 
 jobs:
   resolve_version:
@@ -62,9 +63,9 @@ jobs:
       matrix:
         # linux-only 只起一个 job，便于单独复现 Ubuntu 打包问题；
         # 该模式下 publish-updater-manifest 会被跳过，避免只含 linux 的清单覆盖全平台 Latest。
-        platform: ${{ fromJSON(github.event.inputs.build_platform == 'linux' && '["ubuntu-24.04"]' || github.event.inputs.build_platform == 'windows' && '["windows-2022"]' || github.event.inputs.build_platform == 'macos-intel' && '["macos-15-intel"]' || '["windows-2022","macos-latest","macos-15-intel","ubuntu-24.04"]') }}
+        platform: ${{ fromJSON(github.event.inputs.build_platform == 'linux' && '["ubuntu-24.04"]' || github.event.inputs.build_platform == 'windows' && '["windows-2022"]' || github.event.inputs.build_platform == 'macos-intel' && '["macos-15-intel"]' || github.event.inputs.build_platform == 'macos-x64-cross' && '["macos-x64-cross"]' || '["windows-2022","macos-latest","macos-15-intel","ubuntu-24.04"]') }}
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.platform == 'macos-x64-cross' && 'macos-latest' || matrix.platform }}
 
     steps:
       - name: Checkout publish repo
@@ -104,15 +105,19 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+          targets: ${{ matrix.platform == 'macos-x64-cross' && 'x86_64-apple-darwin' || '' }}
 
       - name: Prepare Intel desktop host
-        if: matrix.platform == 'macos-15-intel'
+        if: matrix.platform == 'macos-15-intel' || matrix.platform == 'macos-x64-cross'
         shell: bash
         run: |
           set -euo pipefail
           node scripts/prepare-intel-host.mjs --source-root OTools
           # Fixed old source tags do not contain the new diagnostics yet.
           cp scripts/ci-build-diagnostics.py OTools/scripts/ci-build-diagnostics.py
+          if [[ "${{ matrix.platform }}" == 'macos-x64-cross' ]]; then
+            cp scripts/check-macos-x64-cross.mjs OTools/scripts/check-macos-x64-cross.mjs
+          fi
 
       - name: Cache Rust dependencies and target
         uses: Swatinem/rust-cache@v2
@@ -123,11 +128,11 @@ jobs:
           # 编译产物从未入库，Linux 每次发布都是 30 分钟以上的全量冷编译。
           workspaces: |
             OTools/src-tauri -> ../target
-          key: ${{ matrix.platform }}-release${{ matrix.platform == 'macos-15-intel' && '-rlib-v1' || '' }}
+          key: ${{ matrix.platform }}-release${{ matrix.platform == 'macos-x64-cross' && '-arm-host-x64-target-rlib-v1' || matrix.platform == 'macos-15-intel' && '-rlib-v1' || '' }}
           # Linux and Intel retain compiled targets; ARM/Windows remain registry-only.
           # Keep Intel workspace rlibs too, rather than rebuilding local infrastructure.
-          cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'macos-15-intel' }}
-          cache-workspace-crates: ${{ matrix.platform == 'macos-15-intel' }}
+          cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'macos-15-intel' || matrix.platform == 'macos-x64-cross' }}
+          cache-workspace-crates: ${{ matrix.platform == 'macos-15-intel' || matrix.platform == 'macos-x64-cross' }}
           # 构建步骤正常失败时也要存下已编译产物。注意 runner 被 OOM 强制回收
           # 会取消整个 job，post 步骤不会执行，那种情况只能靠不 OOM 来解。
           cache-on-failure: true
@@ -151,7 +156,7 @@ jobs:
             libgbm-dev
 
       - name: Install dependencies (macOS)
-        if: startsWith(matrix.platform, 'macos-')
+        if: startsWith(matrix.platform, 'macos-') && matrix.platform != 'macos-x64-cross'
         run: |
           brew update
           brew install unixodbc
@@ -159,6 +164,14 @@ jobs:
       - name: Install dependencies (Windows)
         if: matrix.platform == 'windows-2022'
         run: choco install sqlserver-odbcdriver -y --no-progress
+
+      - name: Preflight macOS x64 cross native code
+        if: matrix.platform == 'macos-x64-cross'
+        shell: bash
+        working-directory: OTools
+        run: |
+          set -euo pipefail
+          node scripts/check-macos-x64-cross.mjs --source-root . --output-dir build-diagnostics
 
       - name: Install dependencies (Frontend)
         working-directory: OTools
@@ -303,6 +316,20 @@ jobs:
               --interval 30 \
               --timeout 5400 \
               -- pnpm tauri:build --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
+          elif [[ "${{ matrix.platform }}" == 'macos-x64-cross' ]]; then
+            # Same optimization baseline as native Intel, different host architecture.
+            export CARGO_PROFILE_RELEASE_OPT_LEVEL=2
+            export CARGO_PROFILE_RELEASE_LTO=off
+            export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+            export CARGO_BUILD_JOBS=1
+            export OPENSSL_NO_VENDOR=0
+            export CC_x86_64_apple_darwin=clang
+            export CXX_x86_64_apple_darwin=clang++
+            python3 scripts/ci-build-diagnostics.py \
+              --output-dir build-diagnostics \
+              --interval 30 \
+              --timeout 5400 \
+              -- pnpm tauri:build --target x86_64-apple-darwin --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           else
             pnpm tauri:build
           fi
@@ -332,19 +359,52 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Upload macOS x64 cross build diagnostics
+        if: always() && matrix.platform == 'macos-x64-cross'
+        uses: actions/upload-artifact@v4
+        with:
+          name: otools-macos-x64-cross-diagnostics-${{ needs.resolve_version.outputs.version }}-${{ github.run_id }}
+          path: |
+            OTools/build-diagnostics/
+            OTools/target/cargo-timings/
+            OTools/src-tauri/target/cargo-timings/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Verify macOS x64 cross candidate
+        if: matrix.platform == 'macos-x64-cross'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app=''
+          for candidate in OTools/target/x86_64-apple-darwin/release/bundle/macos/*.app OTools/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app; do
+            if [[ -d "$candidate" ]]; then
+              app="$candidate"
+              break
+            fi
+          done
+          test -n "$app"
+          node OTools/scripts/check-macos-x64-cross.mjs --app "$app"
+          codesign --verify --deep --strict "$app"
+
       - name: Stage macOS release assets by architecture
         if: startsWith(matrix.platform, 'macos-')
         shell: bash
         run: |
           set -euo pipefail
           version="${{ needs.resolve_version.outputs.version }}"
-          if [[ "${{ matrix.platform }}" == 'macos-15-intel' ]]; then
+          if [[ "${{ matrix.platform }}" == 'macos-15-intel' || "${{ matrix.platform }}" == 'macos-x64-cross' ]]; then
             platform='darwin-x86_64'
           else
             platform='darwin-aarch64'
           fi
           bundle_dir=''
-          for candidate in OTools/src-tauri/target/release/bundle OTools/target/release/bundle; do
+          if [[ "${{ matrix.platform }}" == 'macos-x64-cross' ]]; then
+            candidates=(OTools/src-tauri/target/x86_64-apple-darwin/release/bundle OTools/target/x86_64-apple-darwin/release/bundle)
+          else
+            candidates=(OTools/src-tauri/target/release/bundle OTools/target/release/bundle)
+          fi
+          for candidate in "${candidates[@]}"; do
             if [[ -d "$candidate/macos" ]]; then
               bundle_dir="$candidate"
               break
@@ -385,7 +445,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release Assets (macOS)
-        if: startsWith(matrix.platform, 'macos-')
+        if: startsWith(matrix.platform, 'macos-') && matrix.platform != 'macos-x64-cross'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.resolve_version.outputs.version }}
@@ -419,6 +479,7 @@ jobs:
           os_key_map = {
             "macos-latest": "darwin",
             "macos-15-intel": "darwin",
+            "macos-x64-cross": "darwin",
             "ubuntu-24.04": "linux",
             "windows-2022": "windows",
           }
@@ -436,6 +497,8 @@ jobs:
           machine = platform.machine().lower()
           arch = arch_map.get(machine, machine)
           if arch not in {"x86_64", "aarch64", "i686", "armv7"}:
+            arch = "x86_64"
+          if matrix_platform == "macos-x64-cross":
             arch = "x86_64"
 
           def detect_bundle(path: str):
@@ -507,17 +570,19 @@ jobs:
           candidates.sort(key=lambda item: bundle_order.get(item["bundle"], 999))
 
           platforms = {}
+          candidate_only = matrix_platform == "macos-x64-cross"
           for idx, item in enumerate(candidates):
-            asset_url = f"https://github.com/{repo}/releases/download/{tag}/{item['basename']}"
-            if idx == 0:
-              platforms[f"{os_key}-{arch}"] = {
+            entry = (
+              {"signature": item["signature"], "file": item["basename"]}
+              if candidate_only
+              else {
                 "signature": item["signature"],
-                "url": asset_url,
+                "url": f"https://github.com/{repo}/releases/download/{tag}/{item['basename']}",
               }
-            platforms[f"{os_key}-{arch}-{item['bundle']}"] = {
-              "signature": item["signature"],
-              "url": asset_url,
-            }
+            )
+            if idx == 0:
+              platforms[f"{os_key}-{arch}"] = entry
+            platforms[f"{os_key}-{arch}-{item['bundle']}"] = entry
 
           output = {
             "version": version,
@@ -525,15 +590,33 @@ jobs:
             "platforms": platforms,
           }
 
+          if candidate_only:
+            output["candidate_only"] = True
+            output["notes"] = "Actions-only candidate metadata; not an updater feed."
           os.makedirs("updater-manifest", exist_ok=True)
-          out_path = f"updater-manifest/latest-{matrix_platform}.json"
+          out_path = (
+            "updater-manifest/candidate-macos-x64-cross.json"
+            if candidate_only else f"updater-manifest/latest-{matrix_platform}.json"
+          )
           with open(out_path, "w", encoding="utf-8") as f:
             json.dump(output, f, ensure_ascii=False, indent=2)
             f.write("\n")
           print(f"Generated {out_path}")
           PY
 
+      - name: Upload macOS x64 cross candidate
+        if: matrix.platform == 'macos-x64-cross'
+        uses: actions/upload-artifact@v4
+        with:
+          name: otools-macos-x64-cross-candidate-${{ needs.resolve_version.outputs.version }}-${{ github.run_id }}
+          path: |
+            OTools/release-assets/darwin-x86_64/
+            OTools/updater-manifest/candidate-macos-x64-cross.json
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Upload platform latest.json
+        if: matrix.platform != 'macos-x64-cross'
         uses: actions/upload-artifact@v4
         with:
           name: latest-json-${{ matrix.platform }}
@@ -546,7 +629,7 @@ jobs:
   publish-updater-manifest:
     # linux-only 是诊断重跑：此时只有 linux-x86_64 一个平台的清单片段，
     # 合并上传会把正式 latest.json 覆盖成单平台，导致其它客户端检查更新失效。
-    if: github.event.inputs.build_platform != 'linux' && github.event.inputs.build_platform != 'windows' && github.event.inputs.build_platform != 'macos-intel'
+    if: github.event.inputs.build_platform != 'linux' && github.event.inputs.build_platform != 'windows' && github.event.inputs.build_platform != 'macos-intel' && github.event.inputs.build_platform != 'macos-x64-cross'
     needs:
       - resolve_version
       - publish-tauri

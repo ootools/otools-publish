@@ -153,6 +153,47 @@ class HostIntelDurationWorkflowTests(unittest.TestCase):
         self.assertIn("OTools/build-diagnostics/", upload)
 
 
+class HostMacosX64CrossWorkflowTests(unittest.TestCase):
+    def workflow(self):
+        return (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+
+    def test_cross_uses_arm_runner_and_explicit_x64_target(self):
+        text = self.workflow()
+        self.assertIn("          - macos-x64-cross", text)
+        self.assertIn("matrix.platform == 'macos-x64-cross' && 'macos-latest'", text)
+        self.assertIn("targets: ${{ matrix.platform == 'macos-x64-cross' && 'x86_64-apple-darwin' || '' }}", text)
+        self.assertIn("--target x86_64-apple-darwin", text)
+        self.assertIn("macos-15-intel", text)
+        prepare = next(step for step in split_steps(text) if "name: Prepare Intel desktop host" in step)
+        self.assertIn("macos-x64-cross", prepare)
+        self.assertIn("cp scripts/check-macos-x64-cross.mjs OTools/scripts/check-macos-x64-cross.mjs", prepare)
+
+    def test_cross_isolated_from_release_assets_and_latest(self):
+        text = self.workflow()
+        upload = next(step for step in split_steps(text) if "name: Upload Release Assets (macOS)" in step)
+        self.assertIn("matrix.platform != 'macos-x64-cross'", upload)
+        artifact = next(step for step in split_steps(text) if "name: Upload macOS x64 cross candidate" in step)
+        self.assertIn("actions/upload-artifact@v4", artifact)
+        self.assertIn("OTools/release-assets/darwin-x86_64/", artifact)
+        manifest_header = text.split("\n  publish-updater-manifest:", 1)[1].split("\n    steps:", 1)[0]
+        self.assertIn("github.event.inputs.build_platform != 'macos-x64-cross'", manifest_header)
+
+    def test_cross_target_bundle_and_manifest_ignore_runner_architecture(self):
+        text = self.workflow()
+        verify = next(step for step in split_steps(text) if "name: Verify macOS x64 cross candidate" in step)
+        self.assertIn("target/x86_64-apple-darwin/release/bundle", verify)
+        self.assertIn("check-macos-x64-cross.mjs --app", verify)
+        self.assertIn("codesign --verify", verify)
+        manifest = next(step for step in split_steps(text) if "name: Generate platform latest.json" in step)
+        self.assertIn('"macos-x64-cross": "darwin"', manifest)
+        self.assertIn('if matrix_platform == "macos-x64-cross":', manifest)
+        self.assertIn('arch = "x86_64"', manifest)
+        self.assertIn('output["candidate_only"] = True', manifest)
+        self.assertIn('candidate-macos-x64-cross.json', manifest)
+        platform_upload = next(step for step in split_steps(text) if "name: Upload platform latest.json" in step)
+        self.assertIn("matrix.platform != 'macos-x64-cross'", platform_upload)
+
+
 class HostWindowsMemoryWorkflowTests(unittest.TestCase):
     def test_windows_codegen_is_memory_bounded_and_keeps_symbols(self):
         text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
@@ -219,7 +260,7 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         cache = next(step for step in steps if "Swatinem/rust-cache@v2" in step)
         self.assertIn("\n            OTools/src-tauri -> ../target\n", cache)
         self.assertNotIn("\n            OTools/src-tauri -> OTools/target\n", cache)
-        self.assertIn("cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'macos-15-intel' }}", cache)
+        self.assertIn("cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'macos-15-intel' || matrix.platform == 'macos-x64-cross' }}", cache)
 
     def test_linux_build_has_extra_swap_before_lto_link(self):
         """fat-LTO 链接峰值 15-16 GiB 会触发 oom_kill；必须先补足 swap。"""
