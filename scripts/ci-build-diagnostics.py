@@ -22,7 +22,8 @@ CGROUP_STAT_KEYS = (
 )
 
 LINKER_NAMES = {"ld", "ld.lld", "ld.gold", "gold", "lld", "mold", "collect2", "clang", "clang++", "cc"}
-BUNDLER_HINTS = ("appimagetool", "linuxdeploy", "dpkg", "rpmbuild", "mksquashfs", "hdiutil", "codesign", "productbuild")
+BUNDLER_HINTS = ("appimagetool", "linuxdeploy", "dpkg", "rpmbuild", "mksquashfs")
+BUNDLER_NAMES = {"hdiutil", "codesign", "productbuild"}
 
 
 def read_text(path):
@@ -188,7 +189,7 @@ def top_processes(proc_root=None, limit=5):
 
 def infer_phase(processes):
     names = [entry["name"].lower() for entry in processes]
-    if any(any(hint in name for hint in BUNDLER_HINTS) for name in names):
+    if any(name in BUNDLER_NAMES or any(hint in name for hint in BUNDLER_HINTS) for name in names):
         return "bundling"
     if any(name in LINKER_NAMES for name in names):
         return "linking"
@@ -236,40 +237,57 @@ def main():
     received_signal = None
     timed_out = False
     phase_seconds = {}
+    cleanup_errors = []
 
-    def terminate_build(signum):
+    def signal_build(signum, force=False):
         if process is None:
             return
         try:
             if os.name == "posix":
                 os.killpg(process.pid, signum)
             elif process.poll() is None:
-                process.terminate()
+                (process.kill if force else process.terminate)()
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            # macOS may deny killpg after the wrapper has exited. Never let
+            # best-effort cleanup erase the build result or final diagnostics.
+            cleanup_errors.append({"scope": "group", "signal": signal.Signals(signum).name, "error": "permission_denied"})
+            print("[build-diagnostics] process-group cleanup denied; trying direct child", flush=True)
+            if process.poll() is None:
+                try:
+                    if os.name == "posix":
+                        process.send_signal(signum)
+                    else:
+                        (process.kill if force else process.terminate)()
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    cleanup_errors.append({"scope": "child", "signal": signal.Signals(signum).name, "error": "permission_denied"})
+
+    def terminate_build(signum):
+        if process is None:
+            return
+        signal_build(signum)
+        try:
             process.wait(timeout=5)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
+        except subprocess.TimeoutExpired:
             pass
         # pnpm can exit while a cargo/rustc descendant ignores the first signal.
+        if os.name == "posix":
+            signal_build(signal.SIGKILL)
+        else:
+            signal_build(signum, force=True)
         try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            elif process.poll() is None:
-                process.kill()
-        except ProcessLookupError:
-            pass
-        process.wait()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            cleanup_errors.append({"scope": "child", "error": "wait_timeout"})
 
     def shutdown(signum, _frame):
         nonlocal received_signal
         received_signal = signal.Signals(signum).name
         print(f"[build-diagnostics] received {received_signal}", flush=True)
-        if process is not None and process.poll() is None:
-            try:
-                if os.name == "posix":
-                    os.killpg(process.pid, signum)
-                else:
-                    process.terminate()
-            except ProcessLookupError:
-                pass
+        signal_build(signum)
 
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, shutdown)
@@ -313,6 +331,8 @@ def main():
         "exit_code": exit_code,
         "received_signal": received_signal,
         "timed_out": timed_out,
+        "cleanup_limited": bool(cleanup_errors),
+        "cleanup_errors": cleanup_errors,
         "phase_seconds": {phase: round(seconds, 3) for phase, seconds in phase_seconds.items()},
         "elapsed_seconds": round(time.monotonic() - started, 3),
         "last_phase": last_sample.get("phase"),
