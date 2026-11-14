@@ -122,9 +122,35 @@ class HostIntelRecoveryWorkflowTests(unittest.TestCase):
             "export CARGO_PROFILE_RELEASE_LTO=off",
             "export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16",
             "export CARGO_BUILD_JOBS=1",
-            "pnpm tauri:build --verbose -- --config profile.release.package.OTools.opt-level=1",
+            "pnpm tauri:build --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1",
         ):
             self.assertIn(setting, intel)
+
+
+class HostIntelDurationWorkflowTests(unittest.TestCase):
+    def test_intel_prepares_old_source_before_target_cache(self):
+        text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+        self.assertLess(text.index("name: Prepare Intel desktop host"), text.index("name: Cache Rust dependencies and target"))
+        prepare = next(step for step in split_steps(text) if "name: Prepare Intel desktop host" in step)
+        self.assertIn("node scripts/prepare-intel-host.mjs --source-root OTools", prepare)
+        self.assertIn("cp scripts/ci-build-diagnostics.py OTools/scripts/ci-build-diagnostics.py", prepare)
+        cache = next(step for step in split_steps(text) if "name: Cache Rust dependencies and target" in step)
+        self.assertIn("matrix.platform == 'macos-15-intel'", cache)
+        self.assertIn("cache-workspace-crates:", cache)
+        self.assertIn("rlib-v1", cache)
+        self.assertNotIn("github.run_id", cache)
+        self.assertIn("OTools/src-tauri -> ../target", cache)
+
+    def test_intel_timeout_keeps_diagnostics_and_cargo_timing_artifacts(self):
+        text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+        intel = text.split('elif [[ "${{ matrix.platform }}" == \'macos-15-intel\' ]]; then', 1)[1].split("\n          else\n", 1)[0]
+        self.assertIn("--timeout 5400", intel)
+        self.assertIn("python3 scripts/ci-build-diagnostics.py", intel)
+        self.assertIn("--timings", intel)
+        upload = next(step for step in split_steps(text) if "name: Upload Intel build diagnostics" in step)
+        self.assertIn("always()", upload)
+        self.assertIn("OTools/target/cargo-timings/", upload)
+        self.assertIn("OTools/build-diagnostics/", upload)
 
 
 class HostWindowsMemoryWorkflowTests(unittest.TestCase):
@@ -193,7 +219,7 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         cache = next(step for step in steps if "Swatinem/rust-cache@v2" in step)
         self.assertIn("\n            OTools/src-tauri -> ../target\n", cache)
         self.assertNotIn("\n            OTools/src-tauri -> OTools/target\n", cache)
-        self.assertIn("cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') }}", cache)
+        self.assertIn("cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'macos-15-intel' }}", cache)
 
     def test_linux_build_has_extra_swap_before_lto_link(self):
         """fat-LTO 链接峰值 15-16 GiB 会触发 oom_kill；必须先补足 swap。"""

@@ -105,6 +105,15 @@ jobs:
         with:
           toolchain: stable
 
+      - name: Prepare Intel desktop host
+        if: matrix.platform == 'macos-15-intel'
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/prepare-intel-host.mjs --source-root OTools
+          # Fixed old source tags do not contain the new diagnostics yet.
+          cp scripts/ci-build-diagnostics.py OTools/scripts/ci-build-diagnostics.py
+
       - name: Cache Rust dependencies and target
         uses: Swatinem/rust-cache@v2
         with:
@@ -114,10 +123,11 @@ jobs:
           # 编译产物从未入库，Linux 每次发布都是 30 分钟以上的全量冷编译。
           workspaces: |
             OTools/src-tauri -> ../target
-          key: ${{ matrix.platform }}-release
-          # 只给 Linux 缓存 release 依赖产物：4 个平台各存一份 GB 级 target
-          # 会挤爆仓库 10 GiB 的 Actions 缓存配额，其它平台只缓存 registry 即可。
-          cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') }}
+          key: ${{ matrix.platform }}-release${{ matrix.platform == 'macos-15-intel' && '-rlib-v1' || '' }}
+          # Linux and Intel retain compiled targets; ARM/Windows remain registry-only.
+          # Keep Intel workspace rlibs too, rather than rebuilding local infrastructure.
+          cache-targets: ${{ startsWith(matrix.platform, 'ubuntu') || matrix.platform == 'macos-15-intel' }}
+          cache-workspace-crates: ${{ matrix.platform == 'macos-15-intel' }}
           # 构建步骤正常失败时也要存下已编译产物。注意 runner 被 OOM 强制回收
           # 会取消整个 job，post 步骤不会执行，那种情况只能靠不 OOM 来解。
           cache-on-failure: true
@@ -280,15 +290,19 @@ jobs:
               --interval 30 \
               -- timeout -k 30 180m pnpm tauri:build
           elif [[ "${{ matrix.platform }}" == 'macos-15-intel' ]]; then
-            # The original Intel runner stalled for hours at final Rust/LLVM
-            # codegen/linking. Bound per-unit memory without changing other macOS.
+            # rlib-only removes unnecessary host static/dynamic library outputs.
+            # Keep the measured optimization baseline; observe codegen vs linker RSS.
             export CARGO_PROFILE_RELEASE_OPT_LEVEL=2
             export CARGO_PROFILE_RELEASE_LTO=off
             export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
             export CARGO_BUILD_JOBS=1
             # Dependencies retain opt-level=2; limit the giant host crate's
             # optimization pass and expose exact Cargo/rustc phase flags.
-            pnpm tauri:build --verbose -- --config profile.release.package.OTools.opt-level=1
+            python3 scripts/ci-build-diagnostics.py \
+              --output-dir build-diagnostics \
+              --interval 30 \
+              --timeout 5400 \
+              -- pnpm tauri:build --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           else
             pnpm tauri:build
           fi
@@ -303,6 +317,18 @@ jobs:
         with:
           name: otools-build-diagnostics-${{ needs.resolve_version.outputs.version }}-${{ github.run_id }}
           path: OTools/build-diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload Intel build diagnostics
+        if: always() && matrix.platform == 'macos-15-intel'
+        uses: actions/upload-artifact@v4
+        with:
+          name: otools-intel-build-diagnostics-${{ needs.resolve_version.outputs.version }}-${{ github.run_id }}
+          path: |
+            OTools/build-diagnostics/
+            OTools/target/cargo-timings/
+            OTools/src-tauri/target/cargo-timings/
           if-no-files-found: warn
           retention-days: 14
 
