@@ -456,6 +456,15 @@ class HostLinuxDiagnosticsWorkflowTests(unittest.TestCase):
         self.assertIn("matrix.platform == 'ubuntu-24.04'", swap)
         self.assertIn("swapon /mnt/swapfile-extra", swap)
 
+    def test_linux_recovery_bounds_host_optimizer_without_invalidating_dependency_cache(self):
+        build = next(step for step in split_steps(self.workflow()) if "name: Build the App (Linux/MacOS)" in step)
+        linux = build.split("if [[ \"${{ matrix.platform }}\" == 'ubuntu-24.04' ]]; then", 1)[1].split("elif [[", 1)[0]
+        self.assertIn("export CARGO_PROFILE_RELEASE_OPT_LEVEL=2", linux)
+        self.assertIn("export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1", linux)
+        self.assertIn("--config profile.release.package.OTools.opt-level=1", linux)
+        self.assertIn("--timings", linux)
+        self.assertNotIn("export CARGO_PROFILE_RELEASE_OPT_LEVEL=1", linux)
+
     def test_linux_disables_lto_without_changing_other_platforms(self):
         """Linux 用 Cargo 官方环境变量降内存，macOS/Windows 必须保持原配置。
 
