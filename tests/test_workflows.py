@@ -547,5 +547,19 @@ class PluginAppLatestJsonScriptTests(unittest.TestCase):
         self.assertIn("releases/download/{artifact_tag}/", text)
 
 
+
+class HostBoundedContextWorkflowTests(unittest.TestCase):
+    def test_linux_prepares_bounded_acl_before_cache_and_keeps_optimized_release(self):
+        text = (WORKFLOW_DIR / "build-otools.yml").read_text(encoding="utf-8")
+        prepare = next((step for step in split_steps(text) if "name: Prepare bounded Tauri context" in step), "")
+        self.assertIn("if: matrix.platform == 'ubuntu-24.04'", prepare)
+        self.assertIn("node scripts/prepare-tauri-context.mjs --source-root OTools", prepare)
+        self.assertLess(text.index("name: Prepare bounded Tauri context"), text.index("name: Cache Rust dependencies and target"))
+        build = next(step for step in split_steps(text) if "name: Build the App (Linux/MacOS)" in step)
+        linux = build.split("if [[ \"${{ matrix.platform }}\" == 'ubuntu-24.04' ]]; then", 1)[1].split("elif [[", 1)[0]
+        self.assertIn("export CARGO_PROFILE_RELEASE_OPT_LEVEL=2", linux)
+        self.assertIn("--timings --verbose --config profile.release.package.OTools.opt-level=1", linux)
+        self.assertNotIn("opt-level=0", linux)
+
 if __name__ == "__main__":
     unittest.main()

@@ -119,6 +119,15 @@ jobs:
             cp scripts/check-macos-x64-cross.mjs OTools/scripts/check-macos-x64-cross.mjs
           fi
 
+      - name: Prepare bounded Tauri context
+        if: matrix.platform == 'ubuntu-24.04'
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Apply the reviewed codegen fix to immutable source tags as well.
+          # Preserve the same ACL rules; avoid millions of repeated constructors.
+          node scripts/prepare-tauri-context.mjs --source-root OTools
+
       - name: Cache Rust dependencies and target
         uses: Swatinem/rust-cache@v2
         with:
@@ -293,7 +302,9 @@ jobs:
             # 60m → 120m：拆出 ot-platform-core 后实测 `Finished release profile
             # in 59m 05s`，紧接着才开始 AppImage 打包，60m 上限只差 43 秒就把
             # 已编译好的产物打掉（exit 124）。上限必须覆盖编译 + 打包全流程。
-            # v0.9.3 host rustc reached ~14.8 GiB; v0.9.4 twice lost its runner.
+            # The generated ACL previously expanded to 1.3M LLVM instructions.
+            # Preparation replaces that expansion with the same bounded resolver.
+            # Keep measured release/cache settings without disabling optimization.
             # Bound only the giant OTools optimizer via Cargo's package override;
             # dependencies retain opt-level=2 and their existing cached artifacts.
             export CARGO_PROFILE_RELEASE_OPT_LEVEL=2
@@ -304,7 +315,7 @@ jobs:
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
-              -- timeout -k 30 180m pnpm tauri:build --verbose -- --timings --config profile.release.package.OTools.opt-level=1
+              -- timeout -k 30 180m pnpm tauri:build --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           elif [[ "${{ matrix.platform }}" == 'macos-15-intel' ]]; then
             # rlib-only removes unnecessary host static/dynamic library outputs.
             # Keep the measured optimization baseline; observe codegen vs linker RSS.
