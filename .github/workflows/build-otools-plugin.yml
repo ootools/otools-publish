@@ -51,6 +51,7 @@ on:
           - otools-mqtt
           - otools-nav
           - otools-ngork
+          - otools-notes
           - otools-ollama
           - otools-os-helper
           - otools-pakcap
