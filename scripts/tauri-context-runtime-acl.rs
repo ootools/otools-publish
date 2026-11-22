@@ -80,17 +80,23 @@ mod tests {
       ));
       fs::create_dir_all(&path).unwrap();
       let previous = std::env::var_os("OUT_DIR");
-      std::env::set_var("OUT_DIR", &path);
+      // SAFETY: all tests that mutate OUT_DIR are serialized by ENVIRONMENT and
+      // this suite is run with one test thread.
+      unsafe { std::env::set_var("OUT_DIR", &path) };
       Self { path, previous }
     }
   }
 
   impl Drop for OutputDir {
     fn drop(&mut self) {
-      if let Some(previous) = &self.previous {
-        std::env::set_var("OUT_DIR", previous);
-      } else {
-        std::env::remove_var("OUT_DIR");
+      // SAFETY: all tests that mutate OUT_DIR are serialized by ENVIRONMENT and
+      // this suite is run with one test thread.
+      unsafe {
+        if let Some(previous) = &self.previous {
+          std::env::set_var("OUT_DIR", previous);
+        } else {
+          std::env::remove_var("OUT_DIR");
+        }
       }
       fs::remove_dir_all(&self.path).unwrap();
     }

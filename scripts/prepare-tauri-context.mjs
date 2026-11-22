@@ -42,8 +42,10 @@ export const prepareTauriContext = ({ sourceRoot }) => {
   const vendor = path.join(root, 'src-tauri/vendor/tauri-codegen');
   const identity = packageSection(fs.readFileSync(path.join(vendor, 'Cargo.toml'), 'utf8'));
   if (!/^name\s*=\s*"OTools"\s*$/m.test(host)) throw new Error('Refusing to modify a non-OTools host');
+  // 2.5.5 = 旧源码标签（脚本注入有界实现）；2.7.6 = v0.9.9 起 vendor 已自带
+  // 移植版有界实现，脚本只做一致性校验。
   if (!/^name\s*=\s*"tauri-codegen"\s*$/m.test(identity)
-    || !/^version\s*=\s*"2\.5\.5"\s*$/m.test(identity)) {
+    || !/^version\s*=\s*"(?:2\.5\.5|2\.7\.6)"\s*$/m.test(identity)) {
     throw new Error('Unsupported vendored tauri-codegen version');
   }
   const contextFile = path.join(vendor, 'src/context.rs');
