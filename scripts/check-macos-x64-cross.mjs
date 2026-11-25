@@ -25,9 +25,10 @@ export const preflight = ({ sourceRoot, outputDir, run = runTool }) => {
   run('xcrun', ['clang', '-target', 'x86_64-apple-macosx11.0', '-c', cSource, '-o', cObject]);
   requireX64(cObject, run);
   const recording = path.join(path.resolve(sourceRoot), 'src-tauri', 'native', 'recording');
+  const outputSource = path.join(recording, 'Output.swift');
   run('xcrun', ['swiftc', '-parse-as-library', '-whole-module-optimization', '-O', '-emit-object',
     '-module-name', 'OToolsRecording', '-target', 'x86_64-apple-macosx11.0',
-    path.join(recording, 'Recording.swift'), path.join(recording, 'Export.swift'), '-o', swiftObject]);
+    path.join(recording, 'Recording.swift'), path.join(recording, 'Export.swift'), ...(fs.existsSync(outputSource) ? [outputSource] : []), '-o', swiftObject]);
   requireX64(swiftObject, run);
   const result = { host, target: 'x86_64-apple-darwin', cArchitecture: 'x86_64', swiftArchitecture: 'x86_64' };
   fs.writeFileSync(path.join(destination, 'native-preflight.json'), JSON.stringify(result, null, 2) + '\n');
