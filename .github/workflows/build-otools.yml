@@ -56,6 +56,8 @@ jobs:
 
   publish-tauri:
     needs: resolve_version
+    environment:
+      name: release
     permissions:
       contents: write
     strategy:
@@ -174,6 +176,46 @@ jobs:
         if: matrix.platform == 'windows-2022'
         run: choco install sqlserver-odbcdriver -y --no-progress
 
+      - name: Prepare fixed macOS code-signing identity
+        if: startsWith(matrix.platform, 'macos-')
+        shell: bash
+        env:
+          OTOOLS_MACOS_SIGNING_P12_BASE64: ${{ secrets.OTOOLS_MACOS_SIGNING_P12_BASE64 }}
+          OTOOLS_MACOS_SIGNING_P12_PASSWORD: ${{ secrets.OTOOLS_MACOS_SIGNING_P12_PASSWORD }}
+          OTOOLS_MACOS_SIGNING_IDENTITY: ${{ vars.OTOOLS_MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          : "${OTOOLS_MACOS_SIGNING_P12_BASE64:?Missing release environment secret OTOOLS_MACOS_SIGNING_P12_BASE64}"
+          : "${OTOOLS_MACOS_SIGNING_P12_PASSWORD:?Missing release environment secret OTOOLS_MACOS_SIGNING_P12_PASSWORD}"
+          : "${OTOOLS_MACOS_SIGNING_IDENTITY:?Missing release environment variable OTOOLS_MACOS_SIGNING_IDENTITY}"
+          keychain="$RUNNER_TEMP/otools-macos-signing.keychain-db"
+          p12="$RUNNER_TEMP/otools-macos-signing.p12"
+          config="$RUNNER_TEMP/otools-macos-signing-config.json"
+          keychain_password="$(python3 - <<'PY'
+          import secrets
+          print(secrets.token_urlsafe(32))
+          PY
+          )"
+          python3 - "$p12" <<'PY'
+          import base64, pathlib, sys
+          pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(__import__('os').environ['OTOOLS_MACOS_SIGNING_P12_BASE64']))
+          PY
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$p12" -k "$keychain" -P "$OTOOLS_MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          security find-certificate -c "$OTOOLS_MACOS_SIGNING_IDENTITY" "$keychain" >/dev/null
+          python3 - "$config" <<'PY'
+          import json, os, pathlib, sys
+          pathlib.Path(sys.argv[1]).write_text(json.dumps({"bundle": {"macOS": {"signingIdentity": os.environ["OTOOLS_MACOS_SIGNING_IDENTITY"]}}}) + "\n")
+          PY
+          {
+            echo "OTOOLS_MACOS_SIGNING_CONFIG=$config"
+            echo "OTOOLS_MACOS_SIGNING_KEYCHAIN=$keychain"
+          } >> "$GITHUB_ENV"
+
       - name: Preflight macOS x64 cross native code
         if: matrix.platform == 'macos-x64-cross'
         shell: bash
@@ -279,6 +321,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tauri_config_args=()
+          if [[ "${{ matrix.platform }}" == macos-* ]]; then
+            tauri_config_args=(--config "$OTOOLS_MACOS_SIGNING_CONFIG")
+          fi
           if [[ "${{ matrix.platform }}" == 'ubuntu-24.04' ]]; then
             # 0.9.0 Linux 排查结论（截至 run 43196929061）：
             # - 依赖 crate 约 18 分钟编完，之后主 crate `src-tauri` 的单个
@@ -315,7 +361,7 @@ jobs:
             python3 scripts/ci-build-diagnostics.py \
               --output-dir build-diagnostics \
               --interval 30 \
-              -- timeout -k 30 180m pnpm tauri:build --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
+              -- timeout -k 30 180m pnpm tauri:build "${tauri_config_args[@]}" --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           elif [[ "${{ matrix.platform }}" == 'macos-15-intel' ]]; then
             # rlib-only removes unnecessary host static/dynamic library outputs.
             # Keep the measured optimization baseline; observe codegen vs linker RSS.
@@ -329,7 +375,7 @@ jobs:
               --output-dir build-diagnostics \
               --interval 30 \
               --timeout 5400 \
-              -- pnpm tauri:build --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
+              -- pnpm tauri:build "${tauri_config_args[@]}" --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           elif [[ "${{ matrix.platform }}" == 'macos-x64-cross' ]]; then
             # Preserve the measured cross flags/cache; formal runs also need cold-cache headroom.
             cross_timeout=10800
@@ -347,14 +393,43 @@ jobs:
               --output-dir build-diagnostics \
               --interval 30 \
               --timeout "$cross_timeout" \
-              -- pnpm tauri:build --target x86_64-apple-darwin --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
+              -- pnpm tauri:build --target x86_64-apple-darwin "${tauri_config_args[@]}" --verbose -- --timings --verbose --config profile.release.package.OTools.opt-level=1
           else
-            pnpm tauri:build
+            pnpm tauri:build "${tauri_config_args[@]}"
           fi
         env:
           RUST_BACKTRACE: full
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Verify macOS fixed code signature
+        if: startsWith(matrix.platform, 'macos-')
+        working-directory: OTools
+        shell: bash
+        env:
+          OTOOLS_MACOS_SIGNING_IDENTITY: ${{ vars.OTOOLS_MACOS_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          app=''
+          for candidate in src-tauri/target/release/bundle/macos/*.app target/release/bundle/macos/*.app src-tauri/target/x86_64-apple-darwin/release/bundle/macos/*.app target/x86_64-apple-darwin/release/bundle/macos/*.app; do
+            if [[ -d "$candidate" ]]; then
+              app="$candidate"
+              break
+            fi
+          done
+          test -n "$app"
+          codesign --verify --deep --strict "$app"
+          codesign -d --verbose=4 "$app" 2>&1 | grep -F "Authority=$OTOOLS_MACOS_SIGNING_IDENTITY"
+          codesign -d -r- "$app" 2>&1 | grep -F 'identifier "net.lingyun.otools"'
+
+      - name: Cleanup macOS signing keychain
+        if: always() && startsWith(matrix.platform, 'macos-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${OTOOLS_MACOS_SIGNING_KEYCHAIN:-}" && -e "$OTOOLS_MACOS_SIGNING_KEYCHAIN" ]]; then
+            security delete-keychain "$OTOOLS_MACOS_SIGNING_KEYCHAIN" || true
+          fi
 
       - name: Upload Linux build diagnostics
         if: always() && matrix.platform == 'ubuntu-24.04'
