@@ -62,6 +62,7 @@ on:
           - otools-pakcap
           - otools-pic-collage
           - otools-portkill
+          - otools-remote
           - otools-reqwall
           - otools-resume-helper
           - otools-scrcpy
