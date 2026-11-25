@@ -57,6 +57,7 @@ on:
           - otools-pakcap
           - otools-pic-collage
           - otools-portkill
+          - otools-recording
           - otools-remote
           - otools-reqwall
           - otools-resume-helper
